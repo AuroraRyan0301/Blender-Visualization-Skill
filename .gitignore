@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.idea/
+.vscode/
+
+# Local HDRIs are not tracked. See envmaps/README.md to fetch your own.
+envmaps/*.exr
+envmaps/*.hdr
+
+# Render output and smoke artifacts
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+out/
+output/
+outputs/
+_dummy_*
+
+# Allow doc/example screenshots if added later under docs/ or examples/
+!docs/**/*.png
+!examples/**/*.png
