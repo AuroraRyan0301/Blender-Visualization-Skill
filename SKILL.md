@@ -46,11 +46,14 @@ blender_kit/
 │   ├── exr_reader.py               # read_multilayer (needs OpenEXR pkg)
 │   └── postproc.py                 # linear_to_srgb / depth colorbar / normal legend
 ├── scripts/
-│   ├── render_diffuse.py           # realistic Cycles render per view
+│   ├── render_diffuse.py           # realistic Cycles render (--keep_materials for OBJ+MTL/GLB)
 │   ├── render_parts.py             # tab20 per-part diffuse render per view
+│   ├── render_pbr.py               # PBR texture pack (Poly Haven / ambientCG)
+│   ├── render_uv.py                # UV-as-color + checker + 2D layout
 │   ├── render_depth_normal.py      # geometry passes -> multilayer EXR
 │   ├── convert_mesh.py             # format-to-format conversion
-│   └── exr_to_png.py               # EXR -> PNG via linear_to_srgb
+│   ├── exr_to_png.py               # EXR -> PNG via linear_to_srgb
+│   └── fetch_polyhaven_pbr.sh      # one-shot CC0 PBR pack fetcher
 └── examples/
     └── smoke.sh
 ```
@@ -122,6 +125,8 @@ $PYBIN scripts/exr_to_png.py --exr_file foo.exr           # single linear EXR ->
 --roughness     Principled BSDF, default 0.5
 --metallic      Principled BSDF, default 0.0
 --two_sided     swap Principled for two-sided diffuse
+--keep_materials preserve materials embedded in the file (OBJ+MTL, GLB, FBX).
+                 Disables --color/--roughness/--metallic/--two_sided
 --output_format png|exr (default png)
 --source_frame  auto|y_up|z_up (default auto)
 --normalize     none|unit_cube|unit_sphere (default none)
@@ -137,6 +142,48 @@ $PYBIN scripts/exr_to_png.py --exr_file foo.exr           # single linear EXR ->
 --distance, --elevation        same as render_diffuse
 --output_format png|exr        default png
 --source_frame                 default auto
+```
+
+### render_pbr.py
+
+Reads a folder of texture maps (Poly Haven / ambientCG naming) and builds a
+Principled BSDF with each slot wired up.
+
+```
+--obj, --out_dir, --pbr_dir   required
+--uv_scale U V                default 1.0 1.0
+--normal_strength             default 1.0
+--displacement_scale          default 0 (bump-only); >0 enables displacement
+--auto_unwrap                 smart-project if mesh has no UVs
+--views/--samples/--res/--hdri/--hdri_strength/--distance/--elevation
+                              same as render_diffuse
+--output_format png|exr       default png
+--source_frame                default auto
+```
+
+Quick fetch a CC0 pack:
+```bash
+bash scripts/fetch_polyhaven_pbr.sh <slug> <dest_dir> [1k|2k|4k]
+```
+
+### render_uv.py
+
+Three artifacts per view + one global 2D layout:
+
+```
+v{vi}_uvcolor.png    UV emission painted onto the surface (R=U, G=V)
+v{vi}_checker.png    procedural checker via UV mapping (stretch viz)
+uv_layout.png        2D UV islands from matplotlib
+```
+
+```
+--obj, --out_dir              required
+--views, --samples, --res     defaults 4, 32, 1024
+--hdri, --hdri_strength       lights the checker pass
+--distance, --elevation       orbit cam
+--checker_scale               default 10.0
+--auto_unwrap                 smart-project if no UV layer
+--source_frame                default auto
 ```
 
 ### render_depth_normal.py

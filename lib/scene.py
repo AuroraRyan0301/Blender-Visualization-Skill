@@ -42,6 +42,38 @@ def add_mesh_from_arrays(name: str, V: np.ndarray, F: np.ndarray, mat=None,
     return obj
 
 
+def import_with_materials(path: str):
+    """Import obj/glb/gltf/fbx via bpy and KEEP whatever materials the importer
+    creates (OBJ+MTL textures, GLB embedded textures, FBX materials).
+
+    Returns the list of imported mesh objects. Use this instead of
+    add_mesh_from_arrays when you want the file's own materials applied.
+    """
+    from . import mesh_io
+    return mesh_io.load_mesh_blender(path)
+
+
+def world_aabb(objs):
+    """(center, diag) over world-space bbox of every vertex in every obj."""
+    import bpy
+    from mathutils import Vector
+    mn = Vector((float('inf'),) * 3)
+    mx = Vector((float('-inf'),) * 3)
+    for obj in objs:
+        mw = obj.matrix_world
+        for v in obj.data.vertices:
+            p = mw @ v.co
+            for i in range(3):
+                if p[i] < mn[i]:
+                    mn[i] = p[i]
+                if p[i] > mx[i]:
+                    mx[i] = p[i]
+    center = ((mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2)
+    diag = float(((mx[0] - mn[0]) ** 2 + (mx[1] - mn[1]) ** 2 +
+                  (mx[2] - mn[2]) ** 2) ** 0.5)
+    return center, diag
+
+
 def split_by_part_id(V: np.ndarray, F: np.ndarray, face_ids: np.ndarray):
     """Yield (part_id, V_sub, F_sub_local) for each unique part_id >= 0.
 

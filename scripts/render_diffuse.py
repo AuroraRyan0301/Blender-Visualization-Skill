@@ -36,6 +36,9 @@ def main():
     ap.add_argument('--roughness', type=float, default=0.5)
     ap.add_argument('--metallic', type=float, default=0.0)
     ap.add_argument('--two_sided', action='store_true')
+    ap.add_argument('--keep_materials', action='store_true',
+                    help='preserve materials embedded in the file '
+                         '(OBJ+MTL, GLB textures, FBX). Disables --color etc.')
     ap.add_argument('--output_format', choices=['png', 'exr'], default='png')
     ap.add_argument('--source_frame', choices=['auto', 'y_up', 'z_up'],
                     default='auto',
@@ -46,15 +49,21 @@ def main():
 
     mesh_path, _ = resolve_obj_path(args.obj)
     import bpy
-    # Use bpy importer for non-OBJ; manual parser for OBJ (preserves order)
-    V, F = mesh_io.load_mesh_arrays(mesh_path, source_frame=args.source_frame)
-    # Clean up anything bpy imported when loading non-OBJ
-    scene.clear_scene()
-
-    if args.normalize != 'none':
-        V, _ = norm_mod.normalize_verts(V, mode=args.normalize)
-    center = norm_mod.scene_center(V)
-    diag = norm_mod.scene_diag(V)
+    if not args.keep_materials:
+        # Read into numpy and rebuild per-view; lets us swap material easily
+        V, F = mesh_io.load_mesh_arrays(mesh_path, source_frame=args.source_frame)
+        scene.clear_scene()
+        if args.normalize != 'none':
+            V, _ = norm_mod.normalize_verts(V, mode=args.normalize)
+        center = norm_mod.scene_center(V)
+        diag = norm_mod.scene_diag(V)
+        keep = False
+    else:
+        # Preserve file-embedded materials. Import once outside the view loop.
+        scene.clear_scene()
+        keep = True
+        center = None
+        diag = None  # computed inside the loop after first import
 
     hdri = args.hdri
     if not os.path.isabs(hdri):
@@ -67,16 +76,22 @@ def main():
         world.set_world_hdri(hdri, strength=args.hdri_strength)
         render_setup.setup_cycles(samples=args.samples, resolution=args.res)
         render_setup.enable_aux_passes(z=False, normal=False)
+
+        if keep:
+            objs = scene.import_with_materials(mesh_path)
+            center, diag = scene.world_aabb(objs)
+        else:
+            if args.two_sided:
+                mat = materials.two_sided_diffuse('mat', (*args.color, 1.0))
+            else:
+                mat = materials.diffuse_realistic('mat', (*args.color, 1.0),
+                                                    roughness=args.roughness,
+                                                    metallic=args.metallic)
+            scene.add_mesh_from_arrays('obj', V, F, mat=mat, smooth=True)
+
         camera.add_orbit_camera(vi, args.views, center, diag,
                                  distance_factor=args.distance,
                                  elevation_deg=args.elevation)
-        if args.two_sided:
-            mat = materials.two_sided_diffuse('mat', (*args.color, 1.0))
-        else:
-            mat = materials.diffuse_realistic('mat', (*args.color, 1.0),
-                                               roughness=args.roughness,
-                                               metallic=args.metallic)
-        scene.add_mesh_from_arrays('obj', V, F, mat=mat, smooth=True)
 
         out_path = os.path.join(args.out_dir, f'v{vi:02d}.{ext}')
         bpy.context.scene.use_nodes = False

@@ -17,11 +17,14 @@ runs in Blender's bundled Python; the EXR decoder runs in your system Python
 
 | Script | What it produces |
 |---|---|
-| `scripts/render_diffuse.py` | Realistic Cycles render under HDRI lighting. Principled BSDF or two-sided diffuse. PNG (sRGB) or EXR (scene-linear). |
+| `scripts/render_diffuse.py` | Realistic Cycles render under HDRI lighting. Principled BSDF, two-sided diffuse, or file-embedded materials (`--keep_materials` honors OBJ+MTL / GLB textures / FBX). |
 | `scripts/render_parts.py` | Per-part `tab20` color render. Reads `face_ids.npy` aligned to the mesh's face order. |
+| `scripts/render_pbr.py` | Render with a Poly Haven / ambientCG style PBR texture folder. Auto-detects base color / roughness / normal / metallic / AO / displacement maps. |
+| `scripts/render_uv.py` | UV visualization — UV-as-color emission on the mesh surface, procedural UV checker (stretch viz), and 2D UV layout PNG. Optional `--auto_unwrap` (smart-project) if the mesh has no UVs. |
 | `scripts/render_depth_normal.py` | RGB + depth + normal via OPEN_EXR_MULTILAYER. Decoded to PNGs with a proper depth colorbar (meters) and a unit-sphere normal legend. |
 | `scripts/convert_mesh.py` | Convert between `.obj` / `.ply` / `.glb` / `.gltf` / `.stl` / `.fbx` with correct per-format axis handling. |
 | `scripts/exr_to_png.py` | EXR → PNG via `linear_to_srgb`. Single-file or multilayer mode. |
+| `scripts/fetch_polyhaven_pbr.sh` | One-shot CC0 PBR pack fetcher (slug + resolution → folder ready for `render_pbr.py`). |
 
 ## Hard policies
 
@@ -116,9 +119,45 @@ $BLENDER -b --python scripts/render_depth_normal.py -- \
     --obj input.obj --out_dir out/dn --views 4
 python scripts/exr_to_png.py --exr_dir out/dn   # -> rgb.png, depth.png, normal.png, grid.png
 
-# 4. convert mesh formats with correct axis handling
+# 4. PBR texture pack render (CC0 wood from Poly Haven)
+bash scripts/fetch_polyhaven_pbr.sh wood_floor /tmp/wood 1k
+$BLENDER -b --python scripts/render_pbr.py -- \
+    --obj input.glb --pbr_dir /tmp/wood --out_dir out/pbr \
+    --auto_unwrap
+
+# 5. UV visualization (color + checker + 2D layout)
+$BLENDER -b --python scripts/render_uv.py -- \
+    --obj input.obj --out_dir out/uv --auto_unwrap
+
+# 6. convert mesh formats with correct axis handling
 $BLENDER -b --python scripts/convert_mesh.py -- --in mesh.obj --out mesh.glb
 ```
+
+## Materials
+
+Built-in shader builders in `lib/materials.py`:
+
+| Builder | Use |
+|---|---|
+| `diffuse_realistic` | Principled BSDF, configurable roughness + metallic |
+| `two_sided_diffuse` | Backfacing → flipped-normal mix. For unreliable winding. |
+| `tab20_flat` | Categorical tab20 color, two-sided |
+| `principled_textured` | Principled BSDF + per-slot image textures (color/rough/normal/metal/AO/displacement) |
+| `load_pbr_pack(folder)` | Auto-detect a [Poly Haven](https://polyhaven.com/textures) or [ambientCG](https://ambientcg.com/) style folder and return a configured material + detected map dict. |
+| `uv_color_emission` | Emission `(U, V, 0)` — UV painted onto surface |
+| `uv_checker` | Procedural checker via UV mapping — stretching/distortion viz |
+
+`load_pbr_pack` matches these substring patterns (case-insensitive) in file
+basenames; first hit per slot wins:
+
+| slot | substrings | color space |
+|---|---|---|
+| base_color | `diff`, `color`, `basecolor`, `albedo` | sRGB |
+| roughness | `rough`, `roughness` | Non-Color |
+| normal | `nor_gl`, `normal_gl`, `normal` | Non-Color (OpenGL convention) |
+| metallic | `metal`, `metalness` | Non-Color |
+| ao | `ao`, `ambientocclusion` | Non-Color |
+| displacement | `disp`, `displacement`, `height` | Non-Color |
 
 ## Output format
 
