@@ -217,7 +217,8 @@ def make_visual_step(args, scene_obj, material_fn, visual_passes, hdri):
     import bpy
 
     def build_scene(fi):
-        world.set_world_hdri(hdri, strength=args.hdri_strength)
+        world.set_world_hdri(hdri, strength=args.hdri_strength,
+                              transparent_bg=not args.show_bg)
         render_setup.setup_cycles(samples=args.samples, resolution=args.res)
         vl = bpy.context.scene.view_layers[0]
         passes.enable_on_view_layer(vl, visual_passes)
@@ -271,7 +272,8 @@ def make_rgb_only_step(args, scene_obj, material_fn, hdri):
     import bpy
 
     def build_scene(fi):
-        world.set_world_hdri(hdri, strength=args.hdri_strength)
+        world.set_world_hdri(hdri, strength=args.hdri_strength,
+                              transparent_bg=not args.show_bg)
         render_setup.setup_cycles(samples=args.samples, resolution=args.res)
         bpy.context.scene.use_nodes = False
         if args.material == 'file_embedded':

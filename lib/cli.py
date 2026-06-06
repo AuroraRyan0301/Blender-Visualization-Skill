@@ -25,6 +25,9 @@ def add_world_args(ap, default_hdri: str = 'studio.exr'):
     ap.add_argument('--hdri', default=default_hdri,
                     help='HDRI in envmaps/ or absolute path')
     ap.add_argument('--hdri_strength', type=float, default=1.0)
+    ap.add_argument('--show_bg', action='store_true',
+                    help='render the HDRI as the visible background. Default '
+                         'off = transparent bg (PNG alpha=0, EXR film_transparent).')
 
 
 def add_camera_args(ap):
