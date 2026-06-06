@@ -74,14 +74,22 @@ def decode_frame(exr_path: str, out_dir: str, passes=None,
 
 def decode_directory(root_dir: str, passes=None,
                       exposure: float = 0.0) -> list:
-    """Walk root_dir/f*/0001.exr and decode each. Returns list of frame dirs."""
+    """Walk root_dir/f*/ and decode every *.exr inside. Returns frame dirs.
+
+    Supports single-EXR frames (0001.exr) and two-pass frames
+    (visual.exr + mask.exr). PNGs land in the frame's own subdir.
+    """
     frame_dirs = sorted(d for d in os.listdir(root_dir)
                         if (d.startswith('f') or d.startswith('v')) and
-                        os.path.isfile(os.path.join(root_dir, d, '0001.exr')))
+                        os.path.isdir(os.path.join(root_dir, d)))
     out = []
     for d in frame_dirs:
         sub = os.path.join(root_dir, d)
-        decode_frame(os.path.join(sub, '0001.exr'), sub, passes,
-                      exposure=exposure)
+        exrs = sorted(f for f in os.listdir(sub) if f.endswith('.exr'))
+        if not exrs:
+            continue
+        for exr in exrs:
+            decode_frame(os.path.join(sub, exr), sub, passes,
+                          exposure=exposure)
         out.append(sub)
     return out

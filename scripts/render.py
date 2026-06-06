@@ -1,4 +1,4 @@
-"""Unified render pipeline. GPU-only Cycles.
+"""Unified render pipeline. GPU-only Cycles + GPU denoiser.
 
 Four-stage composition:
 
@@ -21,13 +21,18 @@ Four-stage composition:
   Outputs    which passes get written
     --outputs <comma-list of rgb|depth|normal|mask>
     --out_dir DIR --res N --samples N
-    --mp4 --fps   (for rgb output)
+    --mp4 --fps   (rgb-only path)
 
-Outputs route through a multilayer EXR + post-decoder, unless the only output
-is 'rgb' in which case Blender writes the PNG directly via the Standard view
-transform.
+Render strategy:
+  outputs == {rgb}           Blender writes PNG directly (Standard transform).
+  outputs ⊆ visual or mask   single Cycles render -> multilayer EXR per frame.
+  visual + mask both         two Cycles renders per frame; visual.exr + mask.exr
+                              live side by side. Mask uses BOX filter + samples=1
+                              + film_transparent for crisp masks; visual uses the
+                              full --samples for clean rgb.
 """
 import os
+import shutil
 import sys
 import argparse
 
@@ -38,29 +43,26 @@ from lib import (cli, material_registry, materials, passes, render_setup,
 from lib.render_pipeline import render_frames
 
 
+# ---------------------------------------------------------------------------
+# CLI
+
 def add_args(ap):
-    # Scene assembly
     s = ap.add_argument_group('scene')
-    s.add_argument('--scene', required=True,
-                    choices=['mesh', 'parts', 'urdf'])
-    s.add_argument('--mesh', help='path to mesh file (mesh/parts modes), or '
-                                    'KaiNinja obj-id')
-    s.add_argument('--face_ids', help='[parts] face_ids.npy; auto-resolved '
-                                        'for KaiNinja obj-id')
+    s.add_argument('--scene', required=True, choices=['mesh', 'parts', 'urdf'])
+    s.add_argument('--mesh', help='mesh path or KaiNinja obj-id (mesh/parts)')
+    s.add_argument('--face_ids', help='[parts] face_ids.npy')
     s.add_argument('--urdf', help='[urdf] URDF file')
-    s.add_argument('--mesh_root', help='[urdf] base dir for package:// resolution')
+    s.add_argument('--mesh_root', help='[urdf] base for package:// resolution')
     s.add_argument('--select_parts', default='all',
-                    help='[parts/urdf] comma-separated part ids or "all"')
+                    help='[parts/urdf] "all" or comma-separated ids')
     s.add_argument('--normalize', choices=['whole', 'selected', 'none'],
                     default='whole')
     s.add_argument('--source_frame', choices=['auto', 'y_up', 'z_up'],
                     default='auto')
 
-    # Material
     m = ap.add_argument_group('material')
-    m.add_argument('--material', choices=material_registry.NAMES,
-                    default=None,
-                    help='default: diffuse for mesh, tab20 for parts, embedded for urdf')
+    m.add_argument('--material', choices=material_registry.NAMES, default=None,
+                    help='default: diffuse(mesh), tab20(parts), embedded(urdf)')
     m.add_argument('--color', type=float, nargs=3, default=[0.8, 0.8, 0.8])
     m.add_argument('--roughness', type=float, default=0.5)
     m.add_argument('--metallic', type=float, default=0.0)
@@ -71,13 +73,9 @@ def add_args(ap):
     m.add_argument('--checker_scale', type=float, default=10.0)
     m.add_argument('--auto_unwrap', action='store_true')
 
-    # World
     cli.add_world_args(ap)
-
-    # Camera
     cli.add_camera_args(ap)
 
-    # Output
     o = ap.add_argument_group('output')
     o.add_argument('--out_dir', required=True)
     o.add_argument('--outputs', default='rgb',
@@ -87,8 +85,10 @@ def add_args(ap):
     cli.add_video_args(ap)
 
 
-def _resolve_scene(args):
-    """Build the Scene from --scene + the relevant inputs."""
+# ---------------------------------------------------------------------------
+# Scene + material resolution
+
+def resolve_scene(args):
     if args.scene == 'mesh':
         if not args.mesh:
             raise SystemExit('--scene mesh requires --mesh')
@@ -104,7 +104,7 @@ def _resolve_scene(args):
             raise SystemExit(f'--face_ids not found: {fids}')
         sel = None
         if args.select_parts and args.select_parts != 'all':
-            sel = [int(x) for x in args.select_parts.split(',') if x.strip() != '']
+            sel = [int(x) for x in args.select_parts.split(',') if x.strip()]
         return scene_assembly.Scene.from_parts(
             path, fids, normalize=args.normalize,
             source_frame=args.source_frame, select_parts=sel)
@@ -116,47 +116,25 @@ def _resolve_scene(args):
     raise SystemExit(f'unknown scene: {args.scene}')
 
 
-def _default_material(scene_kind: str) -> str:
+def default_material(scene_kind):
     return {'mesh': 'diffuse', 'parts': 'tab20', 'urdf': 'embedded'}[scene_kind]
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    add_args(ap)
-    args = ap.parse_args(parse_blender_argv())
-    if args.material is None:
-        args.material = _default_material(args.scene)
+# ---------------------------------------------------------------------------
+# Single Cycles-render builders. Each returns a (build_scene, configure_output)
+# pair used by render_pipeline.
 
+def make_visual_step(args, scene_obj, material_fn, visual_passes, hdri):
+    """One Cycles invocation that produces rgb/depth/normal passes under HDRI."""
     import bpy
-    scene_obj = _resolve_scene(args)
-    print(f'[scene] {scene_obj.source}: {len(scene_obj.objects)} object(s), '
-          f'diag={scene_obj.diag:.3f}, has_parts={scene_obj.has_parts}')
-
-    material_fn = material_registry.make_factory(args)
-    pass_list = passes.parse(args.outputs)
-    use_multilayer = (pass_list != ['rgb'])
-    is_mask = passes.is_mask_render(pass_list)
-
-    hdri = args.hdri if os.path.isabs(args.hdri) \
-        else os.path.join(world.ENVMAP_DIR, args.hdri)
 
     def build_scene(fi):
-        if is_mask:
-            world.set_world_black()
-            render_setup.setup_cycles(samples=args.samples, resolution=args.res,
-                                        denoise=False)
-            bpy.context.scene.cycles.pixel_filter_type = 'BOX'
-            bpy.context.scene.cycles.filter_width = 0.01
-            bpy.context.scene.render.film_transparent = True
-        else:
-            world.set_world_hdri(hdri, strength=args.hdri_strength)
-            render_setup.setup_cycles(samples=args.samples, resolution=args.res)
+        world.set_world_hdri(hdri, strength=args.hdri_strength)
+        render_setup.setup_cycles(samples=args.samples, resolution=args.res)
         vl = bpy.context.scene.view_layers[0]
-        passes.enable_on_view_layer(vl, pass_list)
-        if not use_multilayer:
-            bpy.context.scene.use_nodes = False
-        bpy.context.scene.view_settings.view_transform = \
-            'Raw' if use_multilayer else 'Standard'
+        passes.enable_on_view_layer(vl, visual_passes)
+        # Visual pass uses Raw view transform because compositor writes EXR.
+        bpy.context.scene.view_settings.view_transform = 'Raw'
         objs = scene_obj.instantiate_into_blender(material_fn)
         if args.material in ('uv_color', 'uv_checker') and args.auto_unwrap:
             from lib import uv as uv_mod
@@ -165,32 +143,138 @@ def main():
                     uv_mod.smart_unwrap(o)
 
     def configure_output(path):
-        if use_multilayer:
-            passes.setup_compositor_multilayer(path, pass_list)
+        passes.setup_compositor_multilayer(path, visual_passes)
+
+    return build_scene, configure_output
+
+
+def make_mask_step(args, scene_obj, mask_passes, hdri):
+    """One Cycles invocation that produces alpha/indexob with crisp edges."""
+    import bpy
+
+    def build_scene(fi):
+        # film_transparent gives us alpha regardless of world; keeping HDRI on
+        # is harmless because we route the Alpha socket (not Image).
+        world.set_world_hdri(hdri, strength=args.hdri_strength)
+        render_setup.setup_cycles(samples=1, resolution=args.res, denoise=False)
+        bpy.context.scene.cycles.pixel_filter_type = 'BOX'
+        bpy.context.scene.cycles.filter_width = 0.01
+        bpy.context.scene.render.film_transparent = True
+        vl = bpy.context.scene.view_layers[0]
+        passes.enable_on_view_layer(vl, mask_passes)
+        bpy.context.scene.view_settings.view_transform = 'Raw'
+
+        # Grey diffuse for the geometry; pass_index = part_id + 1
+        grey = materials.diffuse_realistic('mat_mask', (0.8, 0.8, 0.8, 1.0))
+        scene_obj.instantiate_into_blender(lambda o, i: grey)
+
+    def configure_output(path):
+        passes.setup_compositor_multilayer(path, mask_passes)
+
+    return build_scene, configure_output
+
+
+def make_rgb_only_step(args, scene_obj, material_fn, hdri):
+    """The PNG fast path: no compositor, Blender writes the PNG directly."""
+    import bpy
+
+    def build_scene(fi):
+        world.set_world_hdri(hdri, strength=args.hdri_strength)
+        render_setup.setup_cycles(samples=args.samples, resolution=args.res)
+        bpy.context.scene.use_nodes = False
+        objs = scene_obj.instantiate_into_blender(material_fn)
+        if args.material in ('uv_color', 'uv_checker') and args.auto_unwrap:
+            from lib import uv as uv_mod
+            for o in objs:
+                if not uv_mod.has_uvs(o):
+                    uv_mod.smart_unwrap(o)
+
+    def configure_output(path):
+        cli.configure_output_format(bpy.context.scene, 'png')
+
+    return build_scene, configure_output
+
+
+# ---------------------------------------------------------------------------
+# Main
+
+def main():
+    ap = argparse.ArgumentParser()
+    add_args(ap)
+    args = ap.parse_args(parse_blender_argv())
+    if args.material is None:
+        args.material = default_material(args.scene)
+
+    scene_obj = resolve_scene(args)
+    print(f'[scene] {scene_obj.source}: {len(scene_obj.objects)} object(s), '
+          f'diag={scene_obj.diag:.3f}, has_parts={scene_obj.has_parts}')
+
+    material_fn = material_registry.make_factory(args)
+    pass_list = passes.parse(args.outputs)
+    visual_passes = [p for p in pass_list if p in ('rgb', 'depth', 'normal')]
+    mask_passes = [p for p in pass_list if p in ('alpha', 'indexob')]
+    rgb_only = pass_list == ['rgb']
+
+    hdri = args.hdri if os.path.isabs(args.hdri) \
+        else os.path.join(world.ENVMAP_DIR, args.hdri)
+
+    traj = cli.build_trajectory(args)
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    if rgb_only:
+        build, cfg = make_rgb_only_step(args, scene_obj, material_fn, hdri)
+        mp4_out = (os.path.join(args.out_dir, 'video.mp4')
+                    if args.mp4 else None)
+        render_frames(traj, scene_obj.center, scene_obj.diag,
+                       out_dir=args.out_dir, build_scene=build,
+                       configure_output=cfg, extension='png',
+                       mp4_out=mp4_out, fps=args.fps)
+        return
+
+    # Multilayer path: 1 or 2 Cycles invocations per frame.
+    needs_two = bool(visual_passes) and bool(mask_passes)
+
+    if not needs_two:
+        active_passes = visual_passes or mask_passes
+        if mask_passes:
+            build, cfg = make_mask_step(args, scene_obj, active_passes, hdri)
         else:
-            cli.configure_output_format(bpy.context.scene, 'png')
+            build, cfg = make_visual_step(args, scene_obj, material_fn,
+                                            active_passes, hdri)
+        render_frames(traj, scene_obj.center, scene_obj.diag,
+                       out_dir=args.out_dir, build_scene=build,
+                       configure_output=cfg, use_multilayer_dirs=True)
+    else:
+        # Two-pass: visual then mask. Write to staging subdirs, then
+        # consolidate so each frame dir holds visual.exr + mask.exr.
+        visual_dir = os.path.join(args.out_dir, '_visual')
+        mask_dir = os.path.join(args.out_dir, '_mask')
 
-    mp4_out = (os.path.join(args.out_dir, 'video.mp4')
-                if (args.mp4 and not use_multilayer) else None)
+        vb, vc = make_visual_step(args, scene_obj, material_fn,
+                                    visual_passes, hdri)
+        render_frames(traj, scene_obj.center, scene_obj.diag,
+                       out_dir=visual_dir, build_scene=vb, configure_output=vc,
+                       use_multilayer_dirs=True)
 
-    render_frames(cli.build_trajectory(args),
-                   scene_obj.center, scene_obj.diag,
-                   out_dir=args.out_dir,
-                   build_scene=build_scene,
-                   configure_output=configure_output,
-                   extension='png',
-                   use_multilayer_dirs=use_multilayer,
-                   mp4_out=mp4_out, fps=args.fps)
+        mb, mc = make_mask_step(args, scene_obj, mask_passes, hdri)
+        render_frames(traj, scene_obj.center, scene_obj.diag,
+                       out_dir=mask_dir, build_scene=mb, configure_output=mc,
+                       use_multilayer_dirs=True)
 
-    if use_multilayer:
-        # OpenEXR isn't in Blender's bundled python; decode under a system
-        # python that has `pip install OpenEXR matplotlib`.
-        print('[decode] EXR -> per-pass PNGs:')
-        print(f'  python scripts/exr_to_png.py --dir {args.out_dir}')
-        if is_mask and passes.has_visual(pass_list):
-            print('[warn] mask mode forces BOX filter + film_transparent, '
-                  'so the rgb pass will look aliased. Render rgb and mask '
-                  'separately if you need both at full quality.')
+        for fi in range(len(traj)):
+            target = os.path.join(args.out_dir, f'f{fi:04d}')
+            os.makedirs(target, exist_ok=True)
+            for src_dir, dst_name in (
+                    (visual_dir, 'visual.exr'),
+                    (mask_dir, 'mask.exr')):
+                src = os.path.join(src_dir, f'f{fi:04d}', '0001.exr')
+                if os.path.isfile(src):
+                    shutil.move(src, os.path.join(target, dst_name))
+        shutil.rmtree(visual_dir, ignore_errors=True)
+        shutil.rmtree(mask_dir, ignore_errors=True)
+
+    print('[decode] EXR -> per-pass PNGs:')
+    print(f'  python scripts/exr_to_png.py --dir {args.out_dir}')
 
 
 if __name__ == '__main__':

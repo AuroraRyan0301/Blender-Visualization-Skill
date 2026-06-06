@@ -48,11 +48,19 @@ def setup_cycles(samples: int = 64, resolution: int = 1024,
 
     if denoise:
         s.cycles.use_denoising = True
-        try:
-            s.cycles.denoiser = 'OPTIX' if any(d.type == 'OPTIX' for d in gpu_devs) \
-                else 'OPENIMAGEDENOISE'
-        except Exception:
+        if any(d.type == 'OPTIX' for d in gpu_devs):
+            s.cycles.denoiser = 'OPTIX'
+        else:
+            # OIDN with GPU acceleration is the only acceptable fallback.
+            # CPU denoising is explicitly forbidden by skill policy.
             s.cycles.denoiser = 'OPENIMAGEDENOISE'
+            if hasattr(s.cycles, 'denoising_use_gpu'):
+                s.cycles.denoising_use_gpu = True
+            else:
+                raise NoGPUError(
+                    'GPU denoising unavailable: no OPTIX device, and this '
+                    'Blender build does not expose OIDN-GPU. '
+                    'CPU denoising is forbidden by skill policy.')
 
 
 def _try_compute_device_type(prefs, kind: str) -> bool:

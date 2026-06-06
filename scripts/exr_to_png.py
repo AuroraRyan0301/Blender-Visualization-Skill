@@ -57,17 +57,12 @@ def main():
         print(f'[exr->png] {out_png}')
         return
 
-    frame_dirs = sorted(d for d in os.listdir(args.multilayer_dir)
-                        if (d.startswith('f') or d.startswith('v')) and
-                        os.path.isfile(os.path.join(args.multilayer_dir, d,
-                                                      '0001.exr')))
-    if not frame_dirs:
-        sys.exit(f'no f*/0001.exr (or v*/0001.exr) in {args.multilayer_dir}')
-    for d in frame_dirs:
-        sub = os.path.join(args.multilayer_dir, d)
-        written = decode.decode_frame(os.path.join(sub, '0001.exr'), sub,
-                                        passes=None, exposure=args.exposure)
-        print(f'[exr->png] {d}: {list(written.keys())}')
+    decoded = decode.decode_directory(args.multilayer_dir,
+                                        exposure=args.exposure)
+    if not decoded:
+        sys.exit(f'no f*/<exr> in {args.multilayer_dir}')
+    for sub in decoded:
+        print(f'[exr->png] {os.path.basename(sub)}')
 
 
 if __name__ == '__main__':
