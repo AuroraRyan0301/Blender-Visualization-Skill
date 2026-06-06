@@ -284,6 +284,65 @@ class Scene:
                               source='attraction')
 
     @classmethod
+    def from_ovoxel(cls, npz_path: str, *,
+                     ovoxel_python: Optional[str] = None,
+                     src_axis: str = 'y_up',
+                     cache_dir: Optional[str] = None,
+                     normalize: str = 'whole',
+                     source_frame: str = 'auto',
+                     select_parts: Optional[Iterable[int]] = None) -> 'Scene':
+        """Decode an ovoxel npz to a real mesh + part_id, then load as parts.
+
+        Calls `scripts/ovoxel_to_mesh.py` in a subprocess (the decoder needs
+        torch + CUDA + o_voxel which aren't in Blender's bundled python).
+
+        ovoxel_python: path to a python with o_voxel installed. Defaults to
+                       $OVOXEL_PYTHON or the trellis2 conda env on Tsubame.
+        cache_dir:     where decoded .obj + .fids.npy live (default:
+                       <npz_dir>/.ovoxel_cache/). Skips decoding when the
+                       cached files are newer than the source npz.
+        src_axis:      'y_up' (default) or 'z_up'; passed to the decoder.
+        """
+        import os
+        import shutil
+        import subprocess
+        import sys as _sys
+
+        if not os.path.isfile(npz_path):
+            raise FileNotFoundError(npz_path)
+        npz_dir = os.path.dirname(os.path.abspath(npz_path))
+        base = os.path.splitext(os.path.basename(npz_path))[0]
+        cache_dir = cache_dir or os.path.join(npz_dir, '.ovoxel_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        obj_path = os.path.join(cache_dir, f'{base}.{src_axis}.obj')
+        fids_path = os.path.join(cache_dir, f'{base}.{src_axis}.fids.npy')
+
+        need_decode = (not os.path.isfile(obj_path)
+                        or not os.path.isfile(fids_path)
+                        or os.path.getmtime(obj_path) < os.path.getmtime(npz_path))
+        if need_decode:
+            py = (ovoxel_python
+                   or os.environ.get('OVOXEL_PYTHON')
+                   or '/gs/fs/tga-koike-shanda4/yurh/miniconda3/envs/trellis2/bin/python')
+            if not (os.path.isfile(py) and os.access(py, os.X_OK)):
+                raise RuntimeError(
+                    f'ovoxel decoder python not found at {py}. '
+                    'Pass --ovoxel_python /path/to/python or set OVOXEL_PYTHON env.')
+            decoder = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    '..', 'scripts', 'ovoxel_to_mesh.py')
+            decoder = os.path.normpath(decoder)
+            cmd = [py, decoder, '--in', npz_path, '--out_obj', obj_path,
+                    '--out_fids', fids_path, '--src_axis', src_axis]
+            print(f'[ovoxel] decoding via {py}')
+            subprocess.run(cmd, check=True)
+        else:
+            print(f'[ovoxel] cache hit: {obj_path}')
+
+        return cls.from_parts(obj_path, fids_path,
+                                normalize=normalize, source_frame=source_frame,
+                                select_parts=select_parts)
+
+    @classmethod
     def from_bboxes(cls, npz_path: str, *,
                      mins_key: str = 'mins',
                      maxs_key: str = 'maxs',

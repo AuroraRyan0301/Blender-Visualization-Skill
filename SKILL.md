@@ -40,6 +40,7 @@ $BLENDER -b --python scripts/render.py -- \
 --scene arrows      --npz PATH                        arrow primitives from npz
 --scene attraction  --npz PATH                        KaiNinja attraction field
 --scene bboxes      --npz PATH                        per-part AABB cuboids
+--scene ovoxel      --npz PATH [--src_axis y_up|z_up] decoded dual-contour mesh
 ```
 
 `voxels` reads keys `coords (N,3)` + optional `dual_vertices (N,3)` +
@@ -58,6 +59,18 @@ Each arrow = cylinder shaft + cone head (`--shaft_radius`, `--head_radius`,
 
 `bboxes` reads `part_bboxes (P,6)` or `mins (P,3) + maxs (P,3)`. Each box is
 one solid cuboid colored by part_id.
+
+`ovoxel` decodes the npz to a real dual-contour mesh and renders it as parts.
+The decoder needs torch + CUDA + `o_voxel`, which aren't in Blender's bundled
+python, so this scene shells out to a configured python (default $OVOXEL_PYTHON
+or the trellis2 conda env on Tsubame) running `scripts/ovoxel_to_mesh.py`,
+caches the decoded .obj + .fids.npy in `<npz_dir>/.ovoxel_cache/`, then
+loads as parts. Re-renders hit the cache. `--src_axis` matches the source
+mesh axis convention (`y_up` default, `z_up` for TRELLIS.2/Articraft-derived
+tall-object meshes).
+
+Conceptually: `attraction = bboxes + arrows + ovoxel` from the same npz —
+each scene type exposes one facet.
 
 `--mesh` accepts a path to obj/ply/glb/gltf/stl/fbx or a KaiNinja obj-id
 (resolves to `/gs/bs/tga-koike-shanda/yurh/KaiNinja_v2/preprocess/<id>/`).

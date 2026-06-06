@@ -53,7 +53,7 @@ def add_args(ap):
     s = ap.add_argument_group('scene')
     s.add_argument('--scene', choices=['mesh', 'parts', 'urdf',
                                           'voxels', 'arrows', 'attraction',
-                                          'bboxes'],
+                                          'bboxes', 'ovoxel'],
                     help='required unless using --manifest')
     s.add_argument('--mesh', help='mesh path or KaiNinja obj-id (mesh/parts)')
     s.add_argument('--face_ids', help='[parts] face_ids.npy')
@@ -75,6 +75,11 @@ def add_args(ap):
                     help='[attraction] which of 3 slots (0/1/2), -1 = all 3')
     s.add_argument('--arrow_scale', type=float, default=0.05,
                     help='[attraction] multiplies |attr| -> arrow length')
+    s.add_argument('--src_axis', choices=['y_up', 'z_up'], default='y_up',
+                    help='[ovoxel] axis convention of the encoded mesh')
+    s.add_argument('--ovoxel_python',
+                    help='[ovoxel] python with o_voxel installed for decoding '
+                         '(default: $OVOXEL_PYTHON or trellis2 env on Tsubame)')
     s.add_argument('--select_parts', default='all',
                     help='"all" or comma-separated part ids')
     s.add_argument('--normalize', choices=['whole', 'selected', 'none'],
@@ -185,13 +190,22 @@ def resolve_scene(args):
             raise SystemExit('--scene bboxes requires --npz')
         return scene_assembly.Scene.from_bboxes(
             args.npz, normalize=args.normalize)
+    if args.scene == 'ovoxel':
+        if not args.npz:
+            raise SystemExit('--scene ovoxel requires --npz')
+        return scene_assembly.Scene.from_ovoxel(
+            args.npz, ovoxel_python=args.ovoxel_python,
+            src_axis=args.src_axis,
+            normalize=args.normalize, source_frame=args.source_frame,
+            select_parts=sel)
     raise SystemExit(f'unknown scene: {args.scene}')
 
 
 def default_material(scene_kind):
     return {'mesh': 'diffuse', 'parts': 'tab20', 'urdf': 'embedded',
             'voxels': 'tab20', 'arrows': 'tab20',
-            'attraction': 'tab20', 'bboxes': 'tab20'}[scene_kind]
+            'attraction': 'tab20', 'bboxes': 'tab20',
+            'ovoxel': 'tab20'}[scene_kind]
 
 
 # ---------------------------------------------------------------------------

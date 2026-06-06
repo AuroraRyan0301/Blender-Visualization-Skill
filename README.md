@@ -65,6 +65,7 @@ Three sources of geometry; all return a `Scene` with `objects`, `center`,
 --scene arrows      --npz PATH                         arrow primitives
 --scene attraction  --npz PATH                         KaiNinja attraction field
 --scene bboxes      --npz PATH                         per-part bounding boxes
+--scene ovoxel      --npz PATH [--src_axis y_up|z_up]  decoded dual-contour mesh
 ```
 
 Selection + normalization:
