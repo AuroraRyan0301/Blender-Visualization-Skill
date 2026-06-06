@@ -17,7 +17,7 @@ from . import materials
 
 
 _NAMES = ('diffuse', 'two_sided', 'tab20', 'pbr', 'uv_color', 'uv_checker',
-          'embedded', 'mask')
+          'embedded', 'file_embedded', 'mask')
 
 
 NAMES = _NAMES
@@ -58,6 +58,10 @@ def make_factory(args):
     if m == 'mask':
         return lambda o, i: materials.diffuse_realistic(
             f'mat_{i}', (0.8, 0.8, 0.8, 1.0))
+    if m == 'file_embedded':
+        # Sentinel — render.py must take the bpy-import path
+        # (Scene.instantiate_with_file_materials) instead of calling this.
+        return None
     if m == 'embedded':
         # URDF colors live on each SceneObject; materials.diffuse_realistic
         # builds a per-object material from the declared rgba.

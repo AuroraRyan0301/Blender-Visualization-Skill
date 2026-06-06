@@ -62,7 +62,9 @@ def add_args(ap):
 
     m = ap.add_argument_group('material')
     m.add_argument('--material', choices=material_registry.NAMES, default=None,
-                    help='default: diffuse(mesh), tab20(parts), embedded(urdf)')
+                    help='default: diffuse(mesh), tab20(parts), embedded(urdf). '
+                         'file_embedded keeps OBJ+MTL / GLB textures / FBX '
+                         'materials.')
     m.add_argument('--color', type=float, nargs=3, default=[0.8, 0.8, 0.8])
     m.add_argument('--roughness', type=float, default=0.5)
     m.add_argument('--metallic', type=float, default=0.0)
@@ -135,7 +137,11 @@ def make_visual_step(args, scene_obj, material_fn, visual_passes, hdri):
         passes.enable_on_view_layer(vl, visual_passes)
         # Visual pass uses Raw view transform because compositor writes EXR.
         bpy.context.scene.view_settings.view_transform = 'Raw'
-        objs = scene_obj.instantiate_into_blender(material_fn)
+        if args.material == 'file_embedded':
+            # Use bpy importer; keep OBJ+MTL / GLB / FBX materials as-is.
+            objs = scene_obj.instantiate_with_file_materials()
+        else:
+            objs = scene_obj.instantiate_into_blender(material_fn)
         if args.material in ('uv_color', 'uv_checker') and args.auto_unwrap:
             from lib import uv as uv_mod
             for o in objs:
@@ -182,7 +188,10 @@ def make_rgb_only_step(args, scene_obj, material_fn, hdri):
         world.set_world_hdri(hdri, strength=args.hdri_strength)
         render_setup.setup_cycles(samples=args.samples, resolution=args.res)
         bpy.context.scene.use_nodes = False
-        objs = scene_obj.instantiate_into_blender(material_fn)
+        if args.material == 'file_embedded':
+            objs = scene_obj.instantiate_with_file_materials()
+        else:
+            objs = scene_obj.instantiate_into_blender(material_fn)
         if args.material in ('uv_color', 'uv_checker') and args.auto_unwrap:
             from lib import uv as uv_mod
             for o in objs:
@@ -204,6 +213,8 @@ def main():
     args = ap.parse_args(parse_blender_argv())
     if args.material is None:
         args.material = default_material(args.scene)
+    if args.material == 'file_embedded' and args.scene != 'mesh':
+        raise SystemExit('--material file_embedded only works with --scene mesh')
 
     scene_obj = resolve_scene(args)
     print(f'[scene] {scene_obj.source}: {len(scene_obj.objects)} object(s), '

@@ -88,6 +88,8 @@ swap).
 --material uv_checker     Procedural checker on UV — stretch viz (--checker_scale)
 --material embedded       For URDF: use URDF-declared <material><color>
 --material mask           Grey diffuse (passes carry the mask data)
+--material file_embedded  Use OBJ+MTL / GLB / FBX file-embedded materials
+                          (mesh scene only)
 ```
 
 Defaults: `mesh→diffuse`, `parts→tab20`, `urdf→embedded`.

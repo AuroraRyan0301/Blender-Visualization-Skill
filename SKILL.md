@@ -65,6 +65,8 @@ Z-up. URDF-referenced meshes are treated as already in link frame
 --material uv_checker     Procedural checker on UV (--checker_scale)
 --material embedded       URDF: use URDF-declared <material><color rgba/>
 --material mask           Flat grey (passes carry the mask info)
+--material file_embedded  Use OBJ+MTL / GLB / FBX file-embedded materials
+                          (mesh scene only — imports via bpy, keeps textures)
 ```
 
 Defaults: `mesh→diffuse`, `parts→tab20`, `urdf→embedded`.

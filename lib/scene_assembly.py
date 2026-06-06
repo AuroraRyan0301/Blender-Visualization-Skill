@@ -41,13 +41,17 @@ class Scene:
     diag: float
     has_parts: bool
     source: str = 'mesh'
+    source_path: Optional[str] = None        # for file_embedded re-import
+    normalize_transform: Optional[object] = None  # 4x4 mathutils Matrix or None
 
     @classmethod
     def from_mesh(cls, path: str, *, normalize: str = 'whole',
                    source_frame: str = 'auto') -> 'Scene':
         V, F = mesh_io.load_mesh_arrays(path, source_frame=source_frame)
         objs = [SceneObject(name=os.path.basename(path), V=V, F=F, part_id=0)]
-        return cls._finalize(objs, normalize, has_parts=False, source='mesh')
+        s = cls._finalize(objs, normalize, has_parts=False, source='mesh')
+        s.source_path = path
+        return s
 
     @classmethod
     def from_parts(cls, mesh_path: str, face_ids_path: str, *,
@@ -133,20 +137,21 @@ class Scene:
                 V_for_bbox = np.concatenate(pts, axis=0)
             else:
                 V_for_bbox = np.concatenate([o.V for o in objs], axis=0)
+        normalize_T = None
         if normalize in ('whole', 'selected'):
             mn = V_for_bbox.min(0); mx = V_for_bbox.max(0)
             center = (mn + mx) / 2.0
             scale = float((mx - mn).max())
             scale = scale if scale > 0 else 1.0
+            from mathutils import Matrix, Vector
+            T_neg = Matrix.Translation(Vector((-float(center[0]),
+                                                  -float(center[1]),
+                                                  -float(center[2]))))
+            S = Matrix.Scale(1.0 / scale, 4)
+            normalize_T = S @ T_neg
             for o in objs:
                 if o.world_matrix is not None:
-                    from mathutils import Matrix, Vector
-                    # p' = (p - center) / scale  ==>  S(1/scale) @ T(-center) @ M
-                    T_neg = Matrix.Translation(Vector((-float(center[0]),
-                                                          -float(center[1]),
-                                                          -float(center[2]))))
-                    S = Matrix.Scale(1.0 / scale, 4)
-                    o.world_matrix = S @ T_neg @ o.world_matrix
+                    o.world_matrix = normalize_T @ o.world_matrix
                 else:
                     o.V = ((o.V - center) / scale).astype(np.float32)
             new_center = (0.0, 0.0, 0.0)
@@ -155,7 +160,25 @@ class Scene:
             new_center = tuple(((V_for_bbox.min(0) + V_for_bbox.max(0)) / 2).tolist())
             new_diag = float(np.linalg.norm(V_for_bbox.max(0) - V_for_bbox.min(0)))
         return cls(objects=objs, center=new_center, diag=new_diag,
-                    has_parts=has_parts, source=source)
+                    has_parts=has_parts, source=source,
+                    normalize_transform=normalize_T)
+
+    def instantiate_with_file_materials(self):
+        """Import via bpy importer (keeping OBJ+MTL / GLB / FBX materials).
+
+        Only valid when constructed from from_mesh (source_path set). Applies
+        the same normalization as `instantiate_into_blender` would have, but
+        via matrix_world so the importer's materials survive.
+        """
+        if self.source_path is None:
+            raise RuntimeError(
+                'instantiate_with_file_materials only valid for from_mesh()')
+        from . import scene as scene_mod
+        objs = scene_mod.import_with_materials(self.source_path)
+        if self.normalize_transform is not None:
+            for o in objs:
+                o.matrix_world = self.normalize_transform @ o.matrix_world
+        return objs
 
     def instantiate_into_blender(self, material_fn: Callable):
         """Add every object to the current Blender scene.
