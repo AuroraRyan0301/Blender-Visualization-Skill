@@ -1,13 +1,14 @@
-"""Decode rendered EXR -> PNG via linear_to_srgb.
+"""Multilayer EXR -> per-pass PNGs.
 
-Two input modes:
-  --exr_dir <dir>  : multilayer EXR per view (depth+normal pipeline). Walks
-                     v*/0001.exr and writes rgb.png/depth.png/normal.png +
-                     a combined grid.png.
-  --exr_file <path>: single scene-linear EXR (RGB) -> linear_to_srgb -> PNG
-                     at <path>.png.
+Two modes:
+  --dir <out_dir>    walk out_dir/f*/0001.exr (or v*/0001.exr) and auto-detect
+                     which passes each EXR contains (rgb/depth/normal/alpha/
+                     indexob). For each frame, writes a PNG per pass into the
+                     frame's subdir.
+  --exr_file <path>  single scene-linear RGB EXR -> sRGB PNG next to it.
 
-Run with system python (not Blender's). Requires `pip install OpenEXR`.
+When indexob is present, mask.png + mask_pNNN.png are also written.
+Run with system python (not Blender's). Requires `pip install OpenEXR matplotlib`.
 """
 import os
 import sys
@@ -19,56 +20,10 @@ KIT_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..'))
 if KIT_ROOT not in sys.path:
     sys.path.insert(0, KIT_ROOT)
 
-from lib import exr_reader, postproc  # noqa: E402
+from lib import decode, postproc  # noqa: E402
 
 
-def process_multilayer_view(exr_path: str, out_view_dir: str, exposure: float):
-    layers = exr_reader.read_multilayer(exr_path,
-                                         layers=('rgb', 'depth', 'normal'))
-    rgb_png = os.path.join(out_view_dir, 'rgb.png')
-    depth_png = os.path.join(out_view_dir, 'depth.png')
-    normal_png = os.path.join(out_view_dir, 'normal.png')
-    postproc.exr_rgb_to_png(layers['rgb'], rgb_png,
-                             exposure=exposure, tonemap='srgb')
-    postproc.depth_to_png(layers['depth'], depth_png)
-    postproc.normal_to_png(layers['normal'], normal_png)
-    return rgb_png, depth_png, normal_png
-
-
-def process_mask_view(exr_path: str, out_view_dir: str,
-                       alpha_threshold: float = 0.5):
-    """Read mask multilayer EXR and emit per-pixel PNGs.
-
-    Writes mask.png (whole-object silhouette) and per-part mask_p{pid:03d}.png
-    by thresholding the indexob layer. Part IDs are recovered as
-    `round(indexob) - 1` (background=0 maps to no PNG).
-    """
-    import matplotlib.pyplot as plt
-    os.makedirs(out_view_dir, exist_ok=True)
-    layers = exr_reader.read_multilayer(exr_path, layers=('alpha', 'indexob'))
-    alpha = layers['alpha']
-    mask = (alpha > alpha_threshold).astype(np.uint8) * 255
-    plt.imsave(os.path.join(out_view_dir, 'mask.png'), mask, cmap='gray',
-                vmin=0, vmax=255)
-
-    indexob = layers.get('indexob')
-    if indexob is None:
-        return [os.path.join(out_view_dir, 'mask.png')]
-    idx_int = np.rint(indexob).astype(np.int64)
-    written = [os.path.join(out_view_dir, 'mask.png')]
-    for k in sorted(int(v) for v in np.unique(idx_int)):
-        if k <= 0:
-            continue
-        part_mask = ((idx_int == k) & (alpha > alpha_threshold)).astype(np.uint8) * 255
-        pid = k - 1
-        out_p = os.path.join(out_view_dir, f'mask_p{pid:03d}.png')
-        plt.imsave(out_p, part_mask, cmap='gray', vmin=0, vmax=255)
-        written.append(out_p)
-    return written
-
-
-def process_single_rgb_exr(exr_path: str, out_png: str, exposure: float):
-    """Single-layer scene-linear EXR (Blender's OPEN_EXR output) -> PNG."""
+def _process_single_rgb(exr_path: str, out_png: str, exposure: float):
     import OpenEXR
     import Imath
     f = OpenEXR.InputFile(exr_path)
@@ -77,79 +32,42 @@ def process_single_rgb_exr(exr_path: str, out_png: str, exposure: float):
     h = dw.max.y - dw.min.y + 1
     w = dw.max.x - dw.min.x + 1
     pt = Imath.PixelType(Imath.PixelType.FLOAT)
-    channels = header['channels']
     suffixes = ['R', 'G', 'B']
-    if 'A' in channels:
+    if 'A' in header['channels']:
         suffixes.append('A')
     bufs = [np.frombuffer(f.channel(s, pt), dtype=np.float32).reshape(h, w, 1)
             for s in suffixes]
     img = np.dstack(bufs)
     postproc.exr_rgb_to_png(img, out_png, exposure=exposure, tonemap='srgb')
-    return out_png
 
 
 def main():
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument('--exr_dir',
-                    help='multilayer EXR root (contains v*/0001.exr ...)')
-    g.add_argument('--mask_dir',
-                    help='mask multilayer EXR root (from render_mask.py)')
-    g.add_argument('--exr_file', help='single linear EXR file -> PNG next to it')
+    g.add_argument('--dir', dest='multilayer_dir',
+                    help='out_dir containing f*/0001.exr (or v*/0001.exr)')
+    g.add_argument('--exr_file', help='single linear EXR -> PNG next to it')
     ap.add_argument('--exposure', type=float, default=0.0,
-                    help='EV stops applied before sRGB encoding (0 = no change)')
-    ap.add_argument('--grid', action='store_true', default=True)
+                    help='EV stops applied before sRGB encoding')
     args = ap.parse_args()
 
     if args.exr_file:
         out_png = os.path.splitext(args.exr_file)[0] + '.png'
-        process_single_rgb_exr(args.exr_file, out_png, args.exposure)
+        _process_single_rgb(args.exr_file, out_png, args.exposure)
         print(f'[exr->png] {out_png}')
         return
 
-    if args.mask_dir:
-        view_dirs = sorted(d for d in os.listdir(args.mask_dir)
-                            if (d.startswith('v') or d.startswith('f')) and
-                            os.path.isfile(os.path.join(args.mask_dir, d, '0001.exr')))
-        if not view_dirs:
-            sys.exit(f'no f*/0001.exr (or v*/0001.exr) in {args.mask_dir}')
-        for v in view_dirs:
-            vdir = os.path.join(args.mask_dir, v)
-            written = process_mask_view(os.path.join(vdir, '0001.exr'), vdir)
-            print(f'[exr->png] {v}: {len(written)} mask png(s) in {vdir}')
-        return
-
-    import matplotlib.pyplot as plt
-    view_dirs = sorted(d for d in os.listdir(args.exr_dir)
-                       if (d.startswith('v') or d.startswith('f')) and
-                       os.path.isfile(os.path.join(args.exr_dir, d, '0001.exr')))
-    if not view_dirs:
-        sys.exit(f'no f*/0001.exr (or v*/0001.exr) in {args.exr_dir}')
-
-    rows = []
-    for v in view_dirs:
-        vdir = os.path.join(args.exr_dir, v)
-        exr = os.path.join(vdir, '0001.exr')
-        rgb_png, depth_png, normal_png = process_multilayer_view(exr, vdir,
-                                                                   args.exposure)
-        rows.append((rgb_png, depth_png, normal_png))
-        print(f'[exr->png] {v}: rgb/depth/normal in {vdir}')
-
-    if args.grid:
-        n_views = len(rows)
-        fig, axes = plt.subplots(n_views, 3, figsize=(12, 4 * n_views))
-        if n_views == 1:
-            axes = axes.reshape(1, -1)
-        for i, (r, d, n) in enumerate(rows):
-            for j, p in enumerate((r, d, n)):
-                axes[i, j].imshow(plt.imread(p))
-                axes[i, j].axis('off')
-                if i == 0:
-                    axes[i, j].set_title(['rgb', 'depth', 'normal'][j])
-        grid_path = os.path.join(args.exr_dir, 'grid.png')
-        fig.savefig(grid_path, bbox_inches='tight', dpi=120)
-        plt.close(fig)
-        print(f'[grid] {grid_path}')
+    frame_dirs = sorted(d for d in os.listdir(args.multilayer_dir)
+                        if (d.startswith('f') or d.startswith('v')) and
+                        os.path.isfile(os.path.join(args.multilayer_dir, d,
+                                                      '0001.exr')))
+    if not frame_dirs:
+        sys.exit(f'no f*/0001.exr (or v*/0001.exr) in {args.multilayer_dir}')
+    for d in frame_dirs:
+        sub = os.path.join(args.multilayer_dir, d)
+        written = decode.decode_frame(os.path.join(sub, '0001.exr'), sub,
+                                        passes=None, exposure=args.exposure)
+        print(f'[exr->png] {d}: {list(written.keys())}')
 
 
 if __name__ == '__main__':

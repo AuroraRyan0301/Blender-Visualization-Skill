@@ -1,118 +1,14 @@
 # Blender-Visualization-Skill
 
-Offline Blender 4.2 Cycles rendering kit, packaged as a "skill" with stable
-entry points. Stop writing one-off render scripts — invoke this kit instead.
+Offline Blender 4.2 Cycles rendering kit, packaged as a "skill" with one
+unified entry point and a four-stage composable pipeline.
 
 ```bash
-bash install.sh                            # one-shot: downloads Blender 4.2 LTS
-export BLENDER="$PWD/blender/blender"
-
-# 4-view static (legacy default)
-$BLENDER -b --python scripts/render_diffuse.py -- --obj input.glb --out_dir out/
-
-# 60-frame turntable video
-$BLENDER -b --python scripts/render_diffuse.py -- --obj input.glb --out_dir out/ \
-        --trajectory circle --frames 60 --mp4 --fps 30
-
-# URDF robot at rest, half-orbit
-$BLENDER -b --python scripts/render_urdf.py -- --urdf robot.urdf --out_dir out/ \
-        --trajectory half_circle --frames 30 --sweep 180
-```
-
-Three render entry points, one EXR decoder, one mesh-format converter. Each
-runs in Blender's bundled Python; the EXR decoder runs in your system Python
-(needs `pip install OpenEXR matplotlib numpy`).
-
-## Capabilities
-
-Every render script takes the same camera + video flags (`--trajectory
-{static,circle,half_circle,hemisphere_jitter}`, `--frames N`, `--mp4`, etc.)
-so the same loop drives PNG sequences and mp4 turntables.
-
-| Script | What it produces |
-|---|---|
-| `scripts/render_urdf.py` | Render a URDF robot at rest pose. Walks the kinematic tree, places each link's visual mesh, honors `<material><color>`. |
-| `scripts/render_diffuse.py` | Realistic Cycles render under HDRI lighting. Principled BSDF, two-sided diffuse, or file-embedded materials (`--keep_materials` honors OBJ+MTL / GLB textures / FBX). |
-| `scripts/render_parts.py` | Per-part `tab20` color render. Reads `face_ids.npy` aligned to the mesh's face order. |
-| `scripts/render_pbr.py` | Render with a Poly Haven / ambientCG style PBR texture folder. Auto-detects base color / roughness / normal / metallic / AO / displacement maps. |
-| `scripts/render_uv.py` | UV visualization — UV-as-color emission on the mesh surface, procedural UV checker (stretch viz), and 2D UV layout PNG. Optional `--auto_unwrap` (smart-project) if the mesh has no UVs. |
-| `scripts/render_depth_normal.py` | RGB + depth + normal via OPEN_EXR_MULTILAYER. Decoded to PNGs with a proper depth colorbar (meters) and a unit-sphere normal legend. |
-| `scripts/render_mask.py` | Whole-object silhouette + per-part binary masks via OPEN_EXR_MULTILAYER (`alpha` + `indexob` slots). BOX filter + `samples=1` for pixel-perfect edges. |
-| `scripts/convert_mesh.py` | Convert between `.obj` / `.ply` / `.glb` / `.gltf` / `.stl` / `.fbx` with correct per-format axis handling. |
-| `scripts/exr_to_png.py` | EXR → PNG via `linear_to_srgb`. Single-file or multilayer mode. |
-| `scripts/fetch_polyhaven_pbr.sh` | One-shot CC0 PBR pack fetcher (slug + resolution → folder ready for `render_pbr.py`). |
-| `scripts/frames_to_mp4.py` | Standalone PNG-sequence → mp4 helper (uses ffmpeg). |
-
-## Camera trajectories
-
-All render scripts share `--trajectory` with four presets:
-
-| name | shape | key args |
-|---|---|---|
-| `static` (default) | N views evenly around a circle (legacy 4-view default) | `--frames`, `--elevation`, `--start_az`, `--distance` |
-| `circle` | full 360° orbit at constant elevation | `--frames`, `--elevation`, `--start_az`, `--distance` |
-| `half_circle` | partial sweep | `--frames`, `--start_az`, `--sweep`, `--elevation`, `--distance` |
-| `hemisphere_jitter` | random points on a patch of the hemisphere | `--frames`, `--center_az`, `--center_el`, `--az_range`, `--el_range`, `--distance`, `--distance_jitter`, `--seed` |
-
-Add `--mp4` (+ `--fps`) to any PNG-output script to stitch frames into
-`out_dir/video.mp4` via ffmpeg. For per-frame EXR scripts (depth+normal,
-mask), decode first with `exr_to_png.py`, then stitch with
-`scripts/frames_to_mp4.py`.
-
-## Hard policies
-
-- **GPU only.** `setup_cycles` raises `NoGPUError` if no CUDA/OPTIX device is
-  visible. CPU rendering is forbidden by design.
-- **Cycles only.** Workbench is forbidden — production output must be ray-traced.
-- **sRGB color transfer.** PNG output uses Blender's `Standard` view transform
-  (linear → sRGB). EXR output is `Raw` (no transform), decoded downstream via
-  `linear_to_srgb` (the IEC 61966-2-1 piecewise curve).
-- **No emission shaders.** Closed cavities can legitimately render RGB=0 under
-  env-only lighting — that's physically correct, not a bug. Use `--two_sided`
-  diffuse for uncertain face winding.
-
-## Mesh format axis handling
-
-Each format's native frame is converted to Blender Z-up automatically:
-
-| ext           | native frame   |
-|---------------|----------------|
-| `.obj`        | Y-up (Wavefront) |
-| `.glb` `.gltf`| Y-up (glTF 2.0)  |
-| `.fbx`        | Y-up           |
-| `.ply` `.stl` `.off` | Z-up (kit convention; override per file with `--source_frame y_up` if needed) |
-
-## Repo layout
-
-```
-.
-├── SKILL.md                  # operational doc (this kit's API)
-├── README.md                 # this file (public-facing overview)
-├── install.sh                # downloads Blender 4.2 LTS into ./blender/
-├── envmaps/
-│   ├── studio.exr            # default HDRI: Poly Haven brown_photostudio_06 (CC0)
-│   └── README.md             # drop additional HDRIs here
-├── lib/                      # building blocks
-│   ├── coord.py              # OBJ Y-up <-> Blender Z-up
-│   ├── mesh_io.py            # multi-format load/save/convert
-│   ├── normalize.py          # unit-cube/unit-sphere + diag/center
-│   ├── normals.py            # fix_normals / split_doubles / offset
-│   ├── materials.py          # diffuse_realistic / two_sided / tab20
-│   ├── camera.py             # add_orbit_camera / add_look_at_camera
-│   ├── world.py              # set_world_hdri / set_world_black
-│   ├── render_setup.py       # setup_cycles (GPU-only) / enable_aux_passes
-│   ├── compositor.py         # setup_multilayer_exr / setup_png_output
-│   ├── scene.py              # clear_scene / add_mesh_from_arrays
-│   ├── exr_reader.py         # read_multilayer (needs OpenEXR pkg)
-│   └── postproc.py           # linear_to_srgb / depth colorbar / normal legend
-├── scripts/                  # entry points
-│   ├── render_diffuse.py
-│   ├── render_parts.py
-│   ├── render_depth_normal.py
-│   ├── convert_mesh.py
-│   └── exr_to_png.py
-└── examples/
-    └── smoke.sh
+$BLENDER -b --python scripts/render.py -- \
+    --scene mesh --mesh input.glb \
+    --material diffuse \
+    --trajectory circle --frames 60 \
+    --outputs rgb,depth,normal --mp4
 ```
 
 ## Install
@@ -120,102 +16,186 @@ Each format's native frame is converted to Blender Z-up automatically:
 ```bash
 git clone https://github.com/AuroraRyan0301/Blender-Visualization-Skill.git
 cd Blender-Visualization-Skill
-bash install.sh                 # downloads Blender 4.2 LTS into ./blender/
+bash install.sh                          # downloads Blender 4.2 LTS into ./blender/
 export BLENDER="$PWD/blender/blender"
-
-# OpenEXR decoder (system python)
-pip install OpenEXR matplotlib numpy
+pip install OpenEXR matplotlib numpy     # for scripts/exr_to_png.py
 ```
 
-`install.sh` is idempotent; safe to re-run. macOS/Windows users should install
-Blender 4.2 manually from https://www.blender.org/download/ and point
-`$BLENDER` at the binary.
+A 2k studio HDRI (`envmaps/studio.exr`, Poly Haven brown_photostudio_06, CC0)
+ships as the default `--hdri`.
 
-A 2k studio HDRI (`envmaps/studio.exr`, from [Poly Haven](https://polyhaven.com/a/brown_photostudio_06), CC0) ships
-with the repo as the default `--hdri`. Drop other `*.exr` files into
-`envmaps/` to use them by filename.
+## Hard policies
 
-## Quick start
+- **GPU only.** No GPU → `NoGPUError`. CPU rendering is forbidden.
+- **Cycles only.** Workbench is forbidden.
+- **sRGB color transfer.** PNG = Blender Standard view transform; EXR = Raw
+  scene-linear, decoded downstream via `linear_to_srgb`.
+- **No emission shaders for visualization.** Closed-cavity facets under
+  env-only lighting legitimately render RGB=0; use `--material two_sided` for
+  unreliable face winding.
+
+## Pipeline (four stages, every render goes through these)
+
+```
+   1. Scene assembly      2. Material         3. Camera             4. Outputs
+   ----------------       ---------------     ------------------    ----------------
+   --scene mesh           --material          --trajectory          --outputs
+   --scene parts            diffuse             static                rgb
+   --scene urdf             two_sided           circle                depth
+                            tab20               half_circle           normal
+   --normalize              pbr                 hemisphere_jitter     mask
+     whole / selected /     uv_color                                  (any subset,
+     none                   uv_checker          --frames N            comma list)
+                            embedded            --start_az
+   --select_parts                               --elevation
+     all | 0,2,5                                --distance
+                                                ...                   --mp4 (rgb only)
+```
+
+### 1. Scene assembly
+
+Three sources of geometry; all return a `Scene` with `objects`, `center`,
+`diag`, optional `part_id` and `world_matrix` per object.
+
+```
+--scene mesh   --mesh PATH                        single mesh, no parts
+--scene parts  --mesh PATH --face_ids PATH        mesh + per-face part IDs
+--scene urdf   --urdf PATH [--mesh_root PATH]     URDF tree at rest pose
+```
+
+Selection + normalization:
+
+```
+--select_parts {all | i,j,k}     filter parts (only for parts/urdf scenes)
+--normalize whole                bbox over ALL geometry  -> unit cube
+--normalize selected             bbox over SELECTED subset -> unit cube (recenters)
+--normalize none                 pass-through, no transform
+```
+
+Mesh format axis handling: OBJ / GLB / GLTF / FBX = Y-up, PLY / STL / OFF =
+Z-up. Auto-converted to Blender Z-up. Override per file with `--source_frame`.
+For URDF, referenced meshes are treated as already in link frame (Z-up, no
+swap).
+
+### 2. Material
+
+```
+--material diffuse        Principled BSDF + --color, --roughness, --metallic
+--material two_sided      Backface-flipped diffuse (opaque)
+--material tab20          Categorical per-part (uses object index)
+--material pbr            Poly Haven / ambientCG folder via --pbr_dir
+--material uv_color       Emission (R=U, G=V) — surface-painted UV viz
+--material uv_checker     Procedural checker on UV — stretch viz (--checker_scale)
+--material embedded       For URDF: use URDF-declared <material><color>
+--material mask           Grey diffuse (passes carry the mask data)
+```
+
+Defaults: `mesh→diffuse`, `parts→tab20`, `urdf→embedded`.
+`uv_color` / `uv_checker` honor `--auto_unwrap` to smart-project if no UV layer.
+
+### 3. Camera trajectory
+
+| name | shape | args |
+|---|---|---|
+| `static` (default) | N views evenly around a circle at `--elevation` | `--start_az`, `--elevation`, `--distance` |
+| `circle` | full 360° orbit | same |
+| `half_circle` | partial sweep of `--sweep` degrees | `--start_az`, `--sweep`, `--elevation`, `--distance` |
+| `hemisphere_jitter` | random samples on a hemisphere patch | `--center_az`, `--center_el`, `--az_range`, `--el_range`, `--distance`, `--distance_jitter`, `--seed` |
+
+### 4. Outputs
+
+```
+--outputs rgb                       (default) — Blender writes PNG directly
+--outputs rgb,depth,normal          rgb + geometry passes -> multilayer EXR
+--outputs mask                      silhouette + per-part masks (BOX filter, samples=1)
+--outputs rgb,depth,normal,mask     everything in one shot (rgb degraded by mask mode)
+```
+
+`mask` is an alias for `alpha,indexob`. Multilayer EXR output goes to
+`out_dir/f{NNNN}/0001.exr`. Decode to per-pass PNGs:
 
 ```bash
-# 1. realistic render, 4 views
-$BLENDER -b --python scripts/render_diffuse.py -- \
-    --obj input.glb --out_dir out/diffuse --views 4 --samples 64 \
-    --hdri studio.exr
-
-# 2. per-part tab20 render (needs face_ids.npy aligned to mesh face order)
-$BLENDER -b --python scripts/render_parts.py -- \
-    --obj input.obj --face_ids face_ids.npy --out_dir out/parts --views 4
-
-# 3. depth+normal pass via multilayer EXR
-$BLENDER -b --python scripts/render_depth_normal.py -- \
-    --obj input.obj --out_dir out/dn --views 4
-python scripts/exr_to_png.py --exr_dir out/dn   # -> rgb.png, depth.png, normal.png, grid.png
-
-# 4. PBR texture pack render (CC0 wood from Poly Haven)
-bash scripts/fetch_polyhaven_pbr.sh wood_floor /tmp/wood 1k
-$BLENDER -b --python scripts/render_pbr.py -- \
-    --obj input.glb --pbr_dir /tmp/wood --out_dir out/pbr \
-    --auto_unwrap
-
-# 5. UV visualization (color + checker + 2D layout)
-$BLENDER -b --python scripts/render_uv.py -- \
-    --obj input.obj --out_dir out/uv --auto_unwrap
-
-# 6. binary masks (silhouette + per-part)
-$BLENDER -b --python scripts/render_mask.py -- \
-    --obj input.obj --out_dir out/mask --views 4
-python scripts/exr_to_png.py --mask_dir out/mask     # -> mask.png + mask_p000.png ...
-
-# 7. convert mesh formats with correct axis handling
-$BLENDER -b --python scripts/convert_mesh.py -- --in mesh.obj --out mesh.glb
+python scripts/exr_to_png.py --dir out_dir
 ```
 
-## Materials
+Auto-detects which passes the EXRs contain (rgb, depth, normal, alpha,
+indexob) and emits PNGs accordingly (`mask.png` + per-part `mask_pNNN.png`
+when indexob is present).
 
-Built-in shader builders in `lib/materials.py`:
+For PNG-only outputs, `--mp4 --fps N` stitches into `out_dir/video.mp4` via
+ffmpeg.
 
-| Builder | Use |
-|---|---|
-| `diffuse_realistic` | Principled BSDF, configurable roughness + metallic |
-| `two_sided_diffuse` | Backfacing → flipped-normal mix. For unreliable winding. |
-| `tab20_flat` | Categorical tab20 color, two-sided |
-| `principled_textured` | Principled BSDF + per-slot image textures (color/rough/normal/metal/AO/displacement) |
-| `load_pbr_pack(folder)` | Auto-detect a [Poly Haven](https://polyhaven.com/textures) or [ambientCG](https://ambientcg.com/) style folder and return a configured material + detected map dict. |
-| `uv_color_emission` | Emission `(U, V, 0)` — UV painted onto surface |
-| `uv_checker` | Procedural checker via UV mapping — stretching/distortion viz |
+## Quick recipes
 
-`load_pbr_pack` matches these substring patterns (case-insensitive) in file
-basenames; first hit per slot wins:
+```bash
+# 60-frame realistic turntable mp4
+$BLENDER -b --python scripts/render.py -- \
+    --scene mesh --mesh input.glb \
+    --trajectory circle --frames 60 --mp4 --fps 30
 
-| slot | substrings | color space |
-|---|---|---|
-| base_color | `diff`, `color`, `basecolor`, `albedo` | sRGB |
-| roughness | `rough`, `roughness` | Non-Color |
-| normal | `nor_gl`, `normal_gl`, `normal` | Non-Color (OpenGL convention) |
-| metallic | `metal`, `metalness` | Non-Color |
-| ao | `ao`, `ambientocclusion` | Non-Color |
-| displacement | `disp`, `displacement`, `height` | Non-Color |
+# Half-orbit per-part tab20 video
+$BLENDER -b --python scripts/render.py -- \
+    --scene parts --mesh <id> \
+    --material tab20 --trajectory half_circle --frames 30 --sweep 180 --mp4
 
-## Output format
+# Single part recentered (selected normalize) + PBR wood
+bash scripts/fetch_polyhaven_pbr.sh wood_floor /tmp/wood 1k
+$BLENDER -b --python scripts/render.py -- \
+    --scene parts --mesh <id> --select_parts 0 --normalize selected \
+    --material pbr --pbr_dir /tmp/wood --auto_unwrap \
+    --trajectory circle --frames 24 --mp4
 
-- `--output_format png` (default): 8-bit sRGB PNG. Blender applies the
-  Standard view transform. Open directly in any viewer.
-- `--output_format exr`: 32-bit scene-linear single-layer EXR. Decode via
-  `scripts/exr_to_png.py --exr_file <path>` to apply `linear_to_srgb` and get
-  a PNG.
+# All-passes EXR + decode
+$BLENDER -b --python scripts/render.py -- \
+    --scene parts --mesh <id> \
+    --outputs rgb,depth,normal,mask --trajectory static --frames 4
+python scripts/exr_to_png.py --dir out_dir
 
-The depth+normal pipeline always writes multilayer EXR (`rgb`, `depth`,
-`normal` slots) since geometry passes need to stay in linear / canonical units.
+# URDF robot at rest, full orbit
+$BLENDER -b --python scripts/render.py -- \
+    --scene urdf --urdf robot.urdf \
+    --trajectory circle --frames 60 --mp4
+```
 
-## Why this exists
+## Repo layout
 
-We kept rewriting Blender boilerplate every time we needed a render. This kit
-captures it once — Cycles config, GPU enforcement, multi-format coord
-conversion, multilayer EXR, depth colorbar in meters, normal sphere legend —
-so callers only state intent (which mesh, which views, which envmap).
-
-See `SKILL.md` for the full operational reference.
+```
+.
+├── SKILL.md                  # full API reference
+├── README.md                 # this file
+├── install.sh                # downloads Blender 4.2 LTS
+├── envmaps/studio.exr        # default HDRI (Poly Haven, CC0)
+├── lib/                      # all the building blocks
+│   ├── scene_assembly.py     # Scene + from_mesh/from_parts/from_urdf
+│   ├── material_registry.py  # --material -> factory(obj, idx) -> Material
+│   ├── trajectory.py         # static / circle / half_circle / hemisphere_jitter
+│   ├── passes.py             # rgb/depth/normal/mask -> compositor wiring
+│   ├── decode.py             # multilayer EXR -> per-pass PNGs
+│   ├── render_pipeline.py    # the one frame loop
+│   ├── urdf.py               # URDF parser + Blender loader
+│   ├── cli.py                # shared argparse helpers
+│   ├── video.py              # ffmpeg frames -> mp4
+│   ├── materials.py          # shader builders
+│   ├── camera.py             # place_camera / orbit / look_at
+│   ├── world.py              # set_world_hdri / set_world_black
+│   ├── render_setup.py       # setup_cycles (GPU-only)
+│   ├── compositor.py         # multilayer/mask EXR wiring
+│   ├── scene.py              # add_mesh_from_arrays / clear / world_aabb
+│   ├── exr_reader.py         # read_multilayer
+│   ├── postproc.py           # linear_to_srgb / colorbars / sphere legend
+│   ├── uv.py                 # smart_unwrap / 2D layout PNG
+│   ├── mesh_io.py            # multi-format load/save/convert
+│   ├── normalize.py          # standalone normalize helpers
+│   ├── normals.py            # fix_normals / split_doubles / offset
+│   └── coord.py              # OBJ Y-up <-> Blender Z-up
+├── scripts/
+│   ├── render.py             # THE entry point
+│   ├── exr_to_png.py         # post-decode multilayer EXR -> PNGs
+│   ├── frames_to_mp4.py      # PNG sequence -> mp4 (ffmpeg)
+│   ├── convert_mesh.py       # format-to-format conversion
+│   └── fetch_polyhaven_pbr.sh # CC0 PBR pack fetcher
+└── examples/smoke.sh
+```
 
 ## License
 
