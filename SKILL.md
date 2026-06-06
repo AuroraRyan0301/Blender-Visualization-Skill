@@ -101,6 +101,50 @@ Recognized basename substrings (case-insensitive):
 --distance 2.5                   factor × scene_diag
 ```
 
+## Batch + multi-node
+
+`--manifest <jobs.jsonl>` runs many jobs in one Blender process — Cycles
+startup, OPTIX kernel JIT, and library imports are amortized across the
+batch. Per-job error isolation (a missing mesh doesn't kill the run).
+
+`jobs.jsonl` — one JSON object per line, each its own job. Keys match the
+single-shot CLI flags. CLI flags become defaults shared by all jobs.
+
+```jsonl
+{"scene": "mesh", "mesh": "abc.glb", "out_dir": "out/abc"}
+{"scene": "parts", "mesh": "xyz", "out_dir": "out/xyz", "select_parts": "0,2"}
+{"scene": "urdf", "urdf": "robot.urdf", "out_dir": "out/robot"}
+```
+
+```bash
+$BLENDER -b --python scripts/render.py -- \
+        --manifest jobs.jsonl \
+        --trajectory circle --frames 60 --samples 64 --res 1024
+```
+
+**Multi-node sharding** — `--rank R --world W` takes only this rank's slice
+of the manifest (`jobs[R::W]`). Each shard runs in its own Blender process,
+typically pinned to one GPU.
+
+Example: 10 nodes × 4 GPUs each = 40 workers, qsub-style:
+
+```bash
+# Per node:
+for GPU in 0 1 2 3; do
+    CUDA_VISIBLE_DEVICES=$GPU \
+    $BLENDER -b --python scripts/render.py -- \
+        --manifest big_jobs.jsonl \
+        --rank $((NODE_IDX * 4 + GPU)) \
+        --world 40 \
+        --trajectory circle --frames 4 --samples 64 --res 512 \
+        > log_node${NODE_IDX}_gpu${GPU}.txt 2>&1 &
+done
+wait
+```
+
+GPU pinning is via `CUDA_VISIBLE_DEVICES` set by the launcher — must come
+BEFORE Blender starts (Cycles caches device enumeration on first init).
+
 ## Stage 4 — Outputs
 
 ```

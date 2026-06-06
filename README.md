@@ -159,6 +159,35 @@ $BLENDER -b --python scripts/render.py -- \
     --trajectory circle --frames 60 --mp4
 ```
 
+## Batch + multi-node
+
+`--manifest jobs.jsonl` runs many jobs in one Blender process. Saves the
+5–10s Cycles/OPTIX startup per job. Per-job error isolation.
+
+`jobs.jsonl` — one JSON object per line; keys match CLI flag names:
+
+```jsonl
+{"scene": "mesh", "mesh": "a.glb", "out_dir": "out/a"}
+{"scene": "parts", "mesh": "b", "out_dir": "out/b", "select_parts": "0,3"}
+```
+
+```bash
+$BLENDER -b --python scripts/render.py -- \
+        --manifest jobs.jsonl --trajectory circle --frames 60
+```
+
+**Multi-node** — `--rank R --world W` runs only `jobs[R::W]` slice. Pin GPU
+via `CUDA_VISIBLE_DEVICES` set by the launcher (must be before Blender starts).
+
+```bash
+# Node N of 10, GPU G of 4:
+for GPU in 0 1 2 3; do
+    CUDA_VISIBLE_DEVICES=$GPU \
+    $BLENDER -b --python scripts/render.py -- \
+        --manifest big.jsonl --rank $((N * 4 + GPU)) --world 40 &
+done; wait
+```
+
 ## Repo layout
 
 ```

@@ -31,10 +31,13 @@ Render strategy:
                               + film_transparent for crisp masks; visual uses the
                               full --samples for clean rgb.
 """
+import copy
+import json
 import os
 import shutil
 import sys
 import argparse
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import parse_blender_argv, resolve_obj_path
@@ -48,7 +51,8 @@ from lib.render_pipeline import render_frames
 
 def add_args(ap):
     s = ap.add_argument_group('scene')
-    s.add_argument('--scene', required=True, choices=['mesh', 'parts', 'urdf'])
+    s.add_argument('--scene', choices=['mesh', 'parts', 'urdf'],
+                    help='required unless using --manifest')
     s.add_argument('--mesh', help='mesh path or KaiNinja obj-id (mesh/parts)')
     s.add_argument('--face_ids', help='[parts] face_ids.npy')
     s.add_argument('--urdf', help='[urdf] URDF file')
@@ -79,12 +83,29 @@ def add_args(ap):
     cli.add_camera_args(ap)
 
     o = ap.add_argument_group('output')
-    o.add_argument('--out_dir', required=True)
+    o.add_argument('--out_dir', help='required unless using --manifest')
     o.add_argument('--outputs', default='rgb',
                     help='comma-separated subset of {rgb,depth,normal,mask}')
     o.add_argument('--samples', type=int, default=64)
     o.add_argument('--res', type=int, default=1024)
     cli.add_video_args(ap)
+
+    b = ap.add_argument_group('batch / multi-node')
+    b.add_argument('--manifest',
+                    help='JSONL file: one JSON object per line. Each line\'s '
+                         'keys override the corresponding --flag for that job. '
+                         'CLI flags become defaults shared by all jobs. '
+                         'Single Blender process amortizes startup across all '
+                         'jobs assigned to this rank.')
+    b.add_argument('--rank', type=int, default=0,
+                    help='shard index for multi-node / multi-GPU split '
+                         '(default 0)')
+    b.add_argument('--world', type=int, default=1,
+                    help='total shard count (default 1); jobs[rank::world] is '
+                         'this rank\'s slice')
+    b.add_argument('--continue_on_error', action='store_true', default=True,
+                    help='[batch] log + skip failed jobs instead of aborting '
+                         '(default True)')
 
 
 # ---------------------------------------------------------------------------
@@ -205,12 +226,13 @@ def make_rgb_only_step(args, scene_obj, material_fn, hdri):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Single-job runner (called once in single-shot mode, once per job in batch)
 
-def main():
-    ap = argparse.ArgumentParser()
-    add_args(ap)
-    args = ap.parse_args(parse_blender_argv())
+def run_one_job(args):
+    if not args.scene:
+        raise SystemExit('--scene is required')
+    if not args.out_dir:
+        raise SystemExit('--out_dir is required')
     if args.material is None:
         args.material = default_material(args.scene)
     if args.material == 'file_embedded' and args.scene != 'mesh':
@@ -286,6 +308,76 @@ def main():
 
     print('[decode] EXR -> per-pass PNGs:')
     print(f'  python scripts/exr_to_png.py --dir {args.out_dir}')
+
+
+# ---------------------------------------------------------------------------
+# Batch / multi-node runner
+
+def _read_manifest(path: str):
+    """Return list of dicts, one per non-empty non-comment line."""
+    jobs = []
+    with open(path) as f:
+        for i, line in enumerate(f, 1):
+            s = line.strip()
+            if not s or s.startswith('#'):
+                continue
+            try:
+                jobs.append(json.loads(s))
+            except json.JSONDecodeError as e:
+                raise SystemExit(f'manifest line {i}: {e}')
+    return jobs
+
+
+def _merge(cli_args, overrides: dict):
+    """CLI flags = defaults; per-job dict overrides win."""
+    a = copy.copy(cli_args)
+    for k, v in overrides.items():
+        if not hasattr(a, k):
+            print(f'  ! ignoring unknown manifest key: {k}')
+            continue
+        setattr(a, k, v)
+    # Per-job material default depends on per-job scene
+    if 'material' not in overrides and a.scene:
+        a.material = None  # let run_one_job pick the scene-specific default
+    return a
+
+
+def run_batch(cli_args):
+    all_jobs = _read_manifest(cli_args.manifest)
+    sliced = all_jobs[cli_args.rank::cli_args.world] \
+        if cli_args.world > 1 else all_jobs
+    print(f'[batch] manifest={cli_args.manifest} '
+          f'rank={cli_args.rank}/{cli_args.world} '
+          f'-> {len(sliced)}/{len(all_jobs)} jobs')
+
+    n_ok = n_fail = 0
+    for i, overrides in enumerate(sliced):
+        tag = (overrides.get('out_dir')
+               or overrides.get('mesh')
+               or overrides.get('urdf')
+               or '?')
+        print(f'[batch {i + 1}/{len(sliced)}] {tag}')
+        try:
+            run_one_job(_merge(cli_args, overrides))
+            n_ok += 1
+        except (SystemExit, Exception) as e:
+            n_fail += 1
+            print(f'  ! failed: {type(e).__name__}: {e}')
+            if not cli_args.continue_on_error:
+                raise
+            traceback.print_exc(limit=2)
+    print(f'[batch] rank {cli_args.rank}: '
+          f'{n_ok} succeeded, {n_fail} failed (of {len(sliced)})')
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    add_args(ap)
+    cli_args = ap.parse_args(parse_blender_argv())
+    if cli_args.manifest:
+        run_batch(cli_args)
+    else:
+        run_one_job(cli_args)
 
 
 if __name__ == '__main__':
