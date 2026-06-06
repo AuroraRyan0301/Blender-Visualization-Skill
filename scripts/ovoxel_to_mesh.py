@@ -54,6 +54,13 @@ def main():
                     default=[-0.5, -0.5, -0.5, 0.5, 0.5, 0.5],
                     metavar=('XMIN', 'YMIN', 'ZMIN', 'XMAX', 'YMAX', 'ZMAX'),
                     help='world-space AABB (default unit cube centered at origin)')
+    ap.add_argument('--src_axis', choices=['y_up', 'z_up'], default='y_up',
+                    help='axis convention of the original encoded mesh. '
+                         'KaiNinja preprocess varies per object: most are y_up, '
+                         'but TRELLIS.2 / Articraft-derived tall-object meshes '
+                         '(microscope, etc.) are z_up. When set to z_up the '
+                         'decoder rotates Z->Y before writing the OBJ so the '
+                         'output matches standard Wavefront convention.')
     ap.add_argument('--coords_key', default='coords')
     ap.add_argument('--dv_key', default='dual_vertices')
     ap.add_argument('--inter_key', default='intersected')
@@ -98,6 +105,12 @@ def main():
     F = faces_t.detach().cpu().numpy().astype(np.int64)
     print(f'[decode] V={V.shape[0]}  F={F.shape[0]}')
 
+    if args.src_axis == 'z_up':
+        # Rotate Z-up source to Y-up so the resulting OBJ matches Wavefront
+        # convention; skill's default --source_frame=auto then handles it.
+        # (x, y, z)_zup -> (x, z, -y)_yup
+        V = np.stack([V[:, 0], V[:, 2], -V[:, 1]], axis=1)
+
     os.makedirs(os.path.dirname(os.path.abspath(args.out_obj)) or '.',
                 exist_ok=True)
     with open(args.out_obj, 'w') as f:
@@ -105,7 +118,8 @@ def main():
             f.write(f'v {v[0]} {v[1]} {v[2]}\n')
         for tri in F:
             f.write(f'f {tri[0] + 1} {tri[1] + 1} {tri[2] + 1}\n')
-    print(f'[wrote] {args.out_obj}')
+    print(f'[wrote] {args.out_obj}  (src_axis={args.src_axis}; '
+          'OBJ in Y-up Wavefront convention)')
 
     if pid_per_vox is not None:
         # vertex index i corresponds to voxel index i (N voxels -> N verts).

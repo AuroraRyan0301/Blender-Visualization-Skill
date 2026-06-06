@@ -34,7 +34,10 @@ def make_factory(args):
         rgba = (*args.color, 1.0)
         return lambda o, i: materials.two_sided_diffuse(f'mat_{i}', rgba)
     if m == 'tab20':
-        return lambda o, i: materials.tab20_flat(f'mat_{i}', i, two_sided=True)
+        # Plain single-sided Diffuse: relies on Cycles' internal shading-normal
+        # auto-flip for back-hits. The two_sided_diffuse wrapper was found to
+        # break on single-shell dual-contoured meshes (microscope test 2026-06).
+        return lambda o, i: materials.tab20_flat(f'mat_{i}', i, two_sided=False)
     if m == 'pbr':
         # Build once, reuse for all objects.
         cached = None
