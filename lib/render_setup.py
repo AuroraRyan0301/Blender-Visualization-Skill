@@ -63,11 +63,13 @@ def _try_compute_device_type(prefs, kind: str) -> bool:
         return False
 
 
-def enable_aux_passes(z: bool = True, normal: bool = True, mist: bool = False):
-    """Enable depth/normal passes on the active ViewLayer."""
+def enable_aux_passes(z: bool = True, normal: bool = True, mist: bool = False,
+                       indexob: bool = False):
+    """Enable depth/normal/IndexOB passes on the active ViewLayer."""
     import bpy
     vl = bpy.context.scene.view_layers[0]
     vl.use_pass_combined = True
     vl.use_pass_z = bool(z)
     vl.use_pass_normal = bool(normal)
     vl.use_pass_mist = bool(mist)
+    vl.use_pass_object_index = bool(indexob)

@@ -35,6 +35,38 @@ def process_multilayer_view(exr_path: str, out_view_dir: str, exposure: float):
     return rgb_png, depth_png, normal_png
 
 
+def process_mask_view(exr_path: str, out_view_dir: str,
+                       alpha_threshold: float = 0.5):
+    """Read mask multilayer EXR and emit per-pixel PNGs.
+
+    Writes mask.png (whole-object silhouette) and per-part mask_p{pid:03d}.png
+    by thresholding the indexob layer. Part IDs are recovered as
+    `round(indexob) - 1` (background=0 maps to no PNG).
+    """
+    import matplotlib.pyplot as plt
+    os.makedirs(out_view_dir, exist_ok=True)
+    layers = exr_reader.read_multilayer(exr_path, layers=('alpha', 'indexob'))
+    alpha = layers['alpha']
+    mask = (alpha > alpha_threshold).astype(np.uint8) * 255
+    plt.imsave(os.path.join(out_view_dir, 'mask.png'), mask, cmap='gray',
+                vmin=0, vmax=255)
+
+    indexob = layers.get('indexob')
+    if indexob is None:
+        return [os.path.join(out_view_dir, 'mask.png')]
+    idx_int = np.rint(indexob).astype(np.int64)
+    written = [os.path.join(out_view_dir, 'mask.png')]
+    for k in sorted(int(v) for v in np.unique(idx_int)):
+        if k <= 0:
+            continue
+        part_mask = ((idx_int == k) & (alpha > alpha_threshold)).astype(np.uint8) * 255
+        pid = k - 1
+        out_p = os.path.join(out_view_dir, f'mask_p{pid:03d}.png')
+        plt.imsave(out_p, part_mask, cmap='gray', vmin=0, vmax=255)
+        written.append(out_p)
+    return written
+
+
 def process_single_rgb_exr(exr_path: str, out_png: str, exposure: float):
     """Single-layer scene-linear EXR (Blender's OPEN_EXR output) -> PNG."""
     import OpenEXR
@@ -61,6 +93,8 @@ def main():
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument('--exr_dir',
                     help='multilayer EXR root (contains v*/0001.exr ...)')
+    g.add_argument('--mask_dir',
+                    help='mask multilayer EXR root (from render_mask.py)')
     g.add_argument('--exr_file', help='single linear EXR file -> PNG next to it')
     ap.add_argument('--exposure', type=float, default=0.0,
                     help='EV stops applied before sRGB encoding (0 = no change)')
@@ -71,6 +105,18 @@ def main():
         out_png = os.path.splitext(args.exr_file)[0] + '.png'
         process_single_rgb_exr(args.exr_file, out_png, args.exposure)
         print(f'[exr->png] {out_png}')
+        return
+
+    if args.mask_dir:
+        view_dirs = sorted(d for d in os.listdir(args.mask_dir)
+                            if d.startswith('v') and
+                            os.path.isfile(os.path.join(args.mask_dir, d, '0001.exr')))
+        if not view_dirs:
+            sys.exit(f'no v*/0001.exr in {args.mask_dir}')
+        for v in view_dirs:
+            vdir = os.path.join(args.mask_dir, v)
+            written = process_mask_view(os.path.join(vdir, '0001.exr'), vdir)
+            print(f'[exr->png] {v}: {len(written)} mask png(s) in {vdir}')
         return
 
     import matplotlib.pyplot as plt

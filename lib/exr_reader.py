@@ -10,8 +10,9 @@ _CHANNEL_SUFFIXES = {
     'rgb': ('R', 'G', 'B', 'A'),
     'normal': ('X', 'Y', 'Z'),
     'depth': ('V',),
-    'alpha': ('A',),
+    'alpha': ('V',),
     'mist': ('V',),
+    'indexob': ('V',),
 }
 
 

@@ -51,6 +51,7 @@ blender_kit/
 │   ├── render_pbr.py               # PBR texture pack (Poly Haven / ambientCG)
 │   ├── render_uv.py                # UV-as-color + checker + 2D layout
 │   ├── render_depth_normal.py      # geometry passes -> multilayer EXR
+│   ├── render_mask.py              # silhouette + per-part masks -> multilayer EXR
 │   ├── convert_mesh.py             # format-to-format conversion
 │   ├── exr_to_png.py               # EXR -> PNG via linear_to_srgb
 │   └── fetch_polyhaven_pbr.sh      # one-shot CC0 PBR pack fetcher
@@ -185,6 +186,29 @@ uv_layout.png        2D UV islands from matplotlib
 --auto_unwrap                 smart-project if no UV layer
 --source_frame                default auto
 ```
+
+### render_mask.py
+
+Binary masks via OPEN_EXR_MULTILAYER. Per view writes `<out_dir>/v{vi}/0001.exr`
+with two slots:
+- `alpha`: whole-object silhouette (float 0..1, from `film_transparent` + Alpha pass)
+- `indexob`: per-part Object Index pass (float ≈ part_id + 1; 0 = background)
+
+Decode via `scripts/exr_to_png.py --mask_dir <out_dir>` → emits `mask.png`
+(silhouette) + `mask_p{pid:03d}.png` per detected part.
+
+```
+--obj, --out_dir              required
+--face_ids                     auto-resolved for KaiNinja obj-id; without it,
+                               only the silhouette is meaningful
+--views, --samples (default 1), --res
+--distance, --elevation
+--source_frame                 default auto
+```
+
+`samples=1` + BOX filter (width 0.01) gives pixel-perfect masks. If two parts
+share coincident facets, edges along the shared boundary will alternate —
+nudge parts apart with `lib.normals.offset_along_normals` upstream if needed.
 
 ### render_depth_normal.py
 

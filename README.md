@@ -22,6 +22,7 @@ runs in Blender's bundled Python; the EXR decoder runs in your system Python
 | `scripts/render_pbr.py` | Render with a Poly Haven / ambientCG style PBR texture folder. Auto-detects base color / roughness / normal / metallic / AO / displacement maps. |
 | `scripts/render_uv.py` | UV visualization — UV-as-color emission on the mesh surface, procedural UV checker (stretch viz), and 2D UV layout PNG. Optional `--auto_unwrap` (smart-project) if the mesh has no UVs. |
 | `scripts/render_depth_normal.py` | RGB + depth + normal via OPEN_EXR_MULTILAYER. Decoded to PNGs with a proper depth colorbar (meters) and a unit-sphere normal legend. |
+| `scripts/render_mask.py` | Whole-object silhouette + per-part binary masks via OPEN_EXR_MULTILAYER (`alpha` + `indexob` slots). BOX filter + `samples=1` for pixel-perfect edges. |
 | `scripts/convert_mesh.py` | Convert between `.obj` / `.ply` / `.glb` / `.gltf` / `.stl` / `.fbx` with correct per-format axis handling. |
 | `scripts/exr_to_png.py` | EXR → PNG via `linear_to_srgb`. Single-file or multilayer mode. |
 | `scripts/fetch_polyhaven_pbr.sh` | One-shot CC0 PBR pack fetcher (slug + resolution → folder ready for `render_pbr.py`). |
@@ -129,7 +130,12 @@ $BLENDER -b --python scripts/render_pbr.py -- \
 $BLENDER -b --python scripts/render_uv.py -- \
     --obj input.obj --out_dir out/uv --auto_unwrap
 
-# 6. convert mesh formats with correct axis handling
+# 6. binary masks (silhouette + per-part)
+$BLENDER -b --python scripts/render_mask.py -- \
+    --obj input.obj --out_dir out/mask --views 4
+python scripts/exr_to_png.py --mask_dir out/mask     # -> mask.png + mask_p000.png ...
+
+# 7. convert mesh formats with correct axis handling
 $BLENDER -b --python scripts/convert_mesh.py -- --in mesh.obj --out mesh.glb
 ```
 
