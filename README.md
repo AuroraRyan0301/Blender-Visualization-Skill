@@ -4,7 +4,8 @@ Offline Blender 4.2 Cycles rendering kit, packaged as a "skill" with stable
 entry points. Stop writing one-off render scripts — invoke this kit instead.
 
 ```bash
-BLENDER=/path/to/blender
+bash install.sh                            # one-shot: downloads Blender 4.2 LTS
+export BLENDER="$PWD/blender/blender"
 $BLENDER -b --python scripts/render_diffuse.py -- --obj input.glb --out_dir out/
 ```
 
@@ -51,8 +52,10 @@ Each format's native frame is converted to Blender Z-up automatically:
 .
 ├── SKILL.md                  # operational doc (this kit's API)
 ├── README.md                 # this file (public-facing overview)
-├── envmaps/                  # drop HDRIs here (gitignored)
-│   └── README.md
+├── install.sh                # downloads Blender 4.2 LTS into ./blender/
+├── envmaps/
+│   ├── studio.exr            # default HDRI: Poly Haven brown_photostudio_06 (CC0)
+│   └── README.md             # drop additional HDRIs here
 ├── lib/                      # building blocks
 │   ├── coord.py              # OBJ Y-up <-> Blender Z-up
 │   ├── mesh_io.py            # multi-format load/save/convert
@@ -76,13 +79,29 @@ Each format's native frame is converted to Blender Z-up automatically:
     └── smoke.sh
 ```
 
+## Install
+
+```bash
+git clone https://github.com/AuroraRyan0301/Blender-Visualization-Skill.git
+cd Blender-Visualization-Skill
+bash install.sh                 # downloads Blender 4.2 LTS into ./blender/
+export BLENDER="$PWD/blender/blender"
+
+# OpenEXR decoder (system python)
+pip install OpenEXR matplotlib numpy
+```
+
+`install.sh` is idempotent; safe to re-run. macOS/Windows users should install
+Blender 4.2 manually from https://www.blender.org/download/ and point
+`$BLENDER` at the binary.
+
+A 2k studio HDRI (`envmaps/studio.exr`, from [Poly Haven](https://polyhaven.com/a/brown_photostudio_06), CC0) ships
+with the repo as the default `--hdri`. Drop other `*.exr` files into
+`envmaps/` to use them by filename.
+
 ## Quick start
 
 ```bash
-# 0. drop an HDRI into envmaps/ (see envmaps/README.md)
-curl -L -o envmaps/studio.exr \
-  https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/2k/brown_photostudio_06_2k.exr
-
 # 1. realistic render, 4 views
 $BLENDER -b --python scripts/render_diffuse.py -- \
     --obj input.glb --out_dir out/diffuse --views 4 --samples 64 \

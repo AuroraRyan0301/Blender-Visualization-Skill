@@ -1,32 +1,26 @@
 # HDRI envmaps
 
-The kit ships **no** HDRIs by default — drop your own `*.exr` files here and
-reference them by filename from any render script:
+`studio.exr` ships with the repo: **brown_photostudio_06_2k** from
+[Poly Haven](https://polyhaven.com/a/brown_photostudio_06), CC0. It's the
+default `--hdri` for all render scripts.
+
+Drop additional `*.exr` files here and reference them by filename:
 
 ```bash
-blender -b --python scripts/render_diffuse.py -- \
-        --obj input.glb --out_dir out --hdri my_studio.exr
+$BLENDER -b --python scripts/render_diffuse.py -- \
+        --obj input.glb --out_dir out --hdri church_meeting_room_2k.exr
 ```
 
 `lib/world.py` resolves bare filenames against this directory and absolute
 paths verbatim.
 
-## Where to get HDRIs
-
-[Poly Haven](https://polyhaven.com/hdris) — CC0, free, high quality. Pick a
-2k or 4k EXR. The defaults referenced in `SKILL.md` come from there:
-
-- `studio.exr` ← `brown_photostudio_06_2k.exr`
-- `studio_blocky.exr` ← `blocky_photo_studio_2k.exr`
-- `church.exr` ← `church_meeting_room_2k.exr`
-
-## Quick fetch
+## Quick fetch from Poly Haven
 
 ```bash
-# pick any HDRI slug from polyhaven and download the 2k EXR:
-curl -L -o studio.exr \
-  "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/2k/brown_photostudio_06_2k.exr"
+# any HDRI slug + a resolution preset (2k / 4k / 1k / 8k):
+SLUG=blocky_photo_studio
+curl -L -o envmaps/${SLUG}_2k.exr \
+  "https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/2k/${SLUG}_2k.exr"
 ```
 
-EXR files are intentionally gitignored — the kit is engine + materials, not a
-HDRI distribution.
+Additional EXRs beyond `studio.exr` are gitignored.

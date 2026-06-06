@@ -71,10 +71,23 @@ particular file violates its format's convention.
 
 Override per script with `--source_frame {auto, y_up, z_up}`.
 
+## Install
+
+```bash
+git clone https://github.com/AuroraRyan0301/Blender-Visualization-Skill.git
+cd Blender-Visualization-Skill
+bash install.sh                # downloads Blender 4.2 LTS Linux x64 into ./blender/
+export BLENDER="$PWD/blender/blender"
+pip install OpenEXR matplotlib numpy   # for scripts/exr_to_png.py
+```
+
+A 2k `studio.exr` HDRI from Poly Haven ships in `envmaps/` and is the default
+`--hdri`. Drop other `*.exr` files into `envmaps/` and reference them by
+filename.
+
 ## Invocation
 
 ```bash
-BLENDER=/gs/fs/tga-koike-shanda4/yurh/blender-4.2.18-linux-x64/blender
 $BLENDER -b --python scripts/render_diffuse.py -- --obj <id-or-path> --out_dir <dir>
 ```
 

@@ -5,9 +5,14 @@ __pycache__/
 .idea/
 .vscode/
 
-# Local HDRIs are not tracked. See envmaps/README.md to fetch your own.
+# Bundled Blender from install.sh
+blender/
+.blender_dl/
+
+# Local HDRIs are not tracked except the bundled default. See envmaps/README.md.
 envmaps/*.exr
 envmaps/*.hdr
+!envmaps/studio.exr
 
 # Render output and smoke artifacts
 *.png
