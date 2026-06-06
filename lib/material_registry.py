@@ -37,7 +37,10 @@ def make_factory(args):
         # Plain single-sided Diffuse: relies on Cycles' internal shading-normal
         # auto-flip for back-hits. The two_sided_diffuse wrapper was found to
         # break on single-shell dual-contoured meshes (microscope test 2026-06).
-        return lambda o, i: materials.tab20_flat(f'mat_{i}', i, two_sided=False)
+        # Color index = part_id (NOT enumeration index) so a part keeps the
+        # same color regardless of --select_parts subsetting.
+        return lambda o, i: materials.tab20_flat(
+            f'mat_p{o.part_id}', o.part_id, two_sided=False)
     if m == 'pbr':
         # Build once, reuse for all objects.
         cached = None
