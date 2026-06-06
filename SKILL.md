@@ -37,23 +37,31 @@ blender_kit/
 │   ├── mesh_io.py                  # multi-format load/save/convert
 │   ├── normalize.py                # unit-cube / unit-sphere + diag/center
 │   ├── normals.py                  # fix_normals / split_doubles / offset
-│   ├── materials.py                # diffuse_realistic / two_sided / tab20
-│   ├── camera.py                   # add_orbit_camera / add_look_at_camera
+│   ├── materials.py                # diffuse_realistic / two_sided / tab20 / pbr / uv
+│   ├── uv.py                       # smart_unwrap / 2D layout PNG
+│   ├── camera.py                   # place_camera / add_orbit_camera / add_look_at
 │   ├── world.py                    # set_world_hdri / set_world_black
 │   ├── render_setup.py             # setup_cycles (GPU-only) / enable_aux_passes
-│   ├── compositor.py               # setup_multilayer_exr / setup_png_output
-│   ├── scene.py                    # clear_scene / add_mesh_from_arrays
+│   ├── compositor.py               # setup_multilayer_exr / setup_mask_multilayer
+│   ├── scene.py                    # clear_scene / add_mesh_from_arrays / world_aabb
 │   ├── exr_reader.py               # read_multilayer (needs OpenEXR pkg)
-│   └── postproc.py                 # linear_to_srgb / depth colorbar / normal legend
+│   ├── postproc.py                 # linear_to_srgb / depth colorbar / normal legend
+│   ├── trajectory.py               # static / circle / half_circle / hemisphere_jitter
+│   ├── video.py                    # ffmpeg frames -> mp4 wrapper
+│   ├── urdf.py                     # URDF parser + Blender loader (rest pose)
+│   ├── cli.py                      # shared argparse helpers + post-processing
+│   └── render_pipeline.py          # the one frame-loop every script uses
 ├── scripts/
 │   ├── render_diffuse.py           # realistic Cycles render (--keep_materials for OBJ+MTL/GLB)
-│   ├── render_parts.py             # tab20 per-part diffuse render per view
+│   ├── render_parts.py             # tab20 per-part diffuse render
 │   ├── render_pbr.py               # PBR texture pack (Poly Haven / ambientCG)
 │   ├── render_uv.py                # UV-as-color + checker + 2D layout
 │   ├── render_depth_normal.py      # geometry passes -> multilayer EXR
 │   ├── render_mask.py              # silhouette + per-part masks -> multilayer EXR
+│   ├── render_urdf.py              # URDF robot at rest pose
 │   ├── convert_mesh.py             # format-to-format conversion
 │   ├── exr_to_png.py               # EXR -> PNG via linear_to_srgb
+│   ├── frames_to_mp4.py            # PNG sequence -> mp4 via ffmpeg
 │   └── fetch_polyhaven_pbr.sh      # one-shot CC0 PBR pack fetcher
 └── examples/
     └── smoke.sh
@@ -88,6 +96,22 @@ pip install OpenEXR matplotlib numpy   # for scripts/exr_to_png.py
 A 2k `studio.exr` HDRI from Poly Haven ships in `envmaps/` and is the default
 `--hdri`. Drop other `*.exr` files into `envmaps/` and reference them by
 filename.
+
+## Camera trajectories (shared across all render scripts)
+
+All scripts accept `--trajectory {static,circle,half_circle,hemisphere_jitter}`,
+`--frames N`, plus the per-preset args below. PNG-output scripts also accept
+`--mp4` + `--fps` for ffmpeg post-stitch into `out_dir/video.mp4`.
+
+| name | shape | args |
+|---|---|---|
+| `static` | N views around a 360° ring at constant elevation. Legacy default for backwards compat (start_az defaults to 35°). | `--start_az`, `--elevation`, `--distance` |
+| `circle` | full 360° orbit — turntable. | `--start_az`, `--elevation`, `--distance` |
+| `half_circle` | partial sweep of `--sweep` degrees from `--start_az`. | `--start_az`, `--sweep`, `--elevation`, `--distance` |
+| `hemisphere_jitter` | random samples in a (`±az_range`, `±el_range`, `±distance_jitter*distance`) box around (`center_az`, `center_el`). | `--center_az`, `--center_el`, `--az_range`, `--el_range`, `--distance`, `--distance_jitter`, `--seed` |
+
+Frame naming: `out_dir/f{NNNN}.{ext}` for PNG/EXR-single outputs,
+`out_dir/f{NNNN}/0001.exr` for multilayer EXR outputs.
 
 ## Invocation
 
@@ -144,6 +168,28 @@ $PYBIN scripts/exr_to_png.py --exr_file foo.exr           # single linear EXR ->
 --output_format png|exr        default png
 --source_frame                 default auto
 ```
+
+### render_urdf.py
+
+Render a URDF robot at rest pose (all joints zero). Walks the kinematic tree
+and places each link's visual mesh / primitive at its world transform.
+`<material><color rgba/>` is honored when present, otherwise default grey.
+
+```
+--urdf                         required, URDF file
+--out_dir                      required
+--mesh_root                    base dir for package:// path resolution
+                               (defaults to URDF's directory)
+--samples, --res, --output_format
+--hdri, --hdri_strength
+--trajectory/--frames/...      shared camera args
+--mp4 --fps
+```
+
+Supports `<mesh>` (any format `mesh_io.load_mesh_arrays` handles), `<box>`,
+`<cylinder>`, `<sphere>`. URDF/ROS uses Z-up X-forward (REP-103), same as
+Blender — mesh files referenced from URDFs are treated as already-in-link-frame
+so OBJ files are NOT auto-rotated.
 
 ### render_pbr.py
 

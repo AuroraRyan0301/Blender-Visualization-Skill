@@ -1,104 +1,96 @@
 """Realistic Cycles render under HDRI lighting. GPU-only.
 
-Reads any supported mesh format (obj/ply/glb/stl/fbx/off) with correct per-format
-axis handling. Writes PNG (sRGB, Standard view transform) by default; pass
---output_format exr for scene-linear EXR and decode via exr_to_png.py.
+Reads any supported mesh format (obj/ply/glb/gltf/stl/fbx). PNG (sRGB) or
+scene-linear EXR. Optional --keep_materials to honor OBJ+MTL / GLB embedded
+textures / FBX. Optional --mp4 to stitch frames.
 
 Usage:
-  blender -b --python render_diffuse.py -- --obj <id-or-path> --out_dir <dir> \
-          [--views 4] [--samples 64] [--res 1024] [--hdri studio.exr] \
-          [--distance 2.5] [--color 0.8 0.8 0.8] [--output_format png|exr]
+  blender -b --python render_diffuse.py -- \
+        --obj input.glb --out_dir out --trajectory circle --frames 60 --mp4
 """
 import os
 import sys
 import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import parse_blender_argv, resolve_obj_path, configure_output_format
-from lib import normalize as norm_mod, materials, camera, world
-from lib import render_setup, scene, mesh_io
+from _common import parse_blender_argv, resolve_obj_path
+from lib import cli, materials, mesh_io, normalize, render_setup, scene, world
+from lib.render_pipeline import render_frames
 
 
 def main():
-    argv = parse_blender_argv()
     ap = argparse.ArgumentParser()
-    ap.add_argument('--obj', required=True)
-    ap.add_argument('--out_dir', required=True)
-    ap.add_argument('--views', type=int, default=4)
-    ap.add_argument('--samples', type=int, default=64)
-    ap.add_argument('--res', type=int, default=1024)
-    ap.add_argument('--hdri', default='studio.exr',
-                    help='filename in envmaps/ or absolute path')
-    ap.add_argument('--hdri_strength', type=float, default=1.0)
-    ap.add_argument('--distance', type=float, default=2.5)
-    ap.add_argument('--elevation', type=float, default=25.0)
+    cli.add_io_args(ap)
+    cli.add_render_args(ap)
+    cli.add_world_args(ap)
+    cli.add_camera_args(ap)
+    cli.add_video_args(ap)
     ap.add_argument('--color', type=float, nargs=3, default=[0.8, 0.8, 0.8])
     ap.add_argument('--roughness', type=float, default=0.5)
     ap.add_argument('--metallic', type=float, default=0.0)
     ap.add_argument('--two_sided', action='store_true')
     ap.add_argument('--keep_materials', action='store_true',
-                    help='preserve materials embedded in the file '
-                         '(OBJ+MTL, GLB textures, FBX). Disables --color etc.')
-    ap.add_argument('--output_format', choices=['png', 'exr'], default='png')
-    ap.add_argument('--source_frame', choices=['auto', 'y_up', 'z_up'],
-                    default='auto',
-                    help='override per-format default coord frame')
+                    help='preserve file-embedded materials (OBJ+MTL, GLB, FBX)')
     ap.add_argument('--normalize', choices=['none', 'unit_cube', 'unit_sphere'],
                     default='none')
-    args = ap.parse_args(argv)
+    args = ap.parse_args(parse_blender_argv())
 
     mesh_path, _ = resolve_obj_path(args.obj)
     import bpy
-    if not args.keep_materials:
-        # Read into numpy and rebuild per-view; lets us swap material easily
+
+    if args.keep_materials:
+        # Camera bbox is computed inside the loop after each re-import.
+        center, diag = None, None
+    else:
         V, F = mesh_io.load_mesh_arrays(mesh_path, source_frame=args.source_frame)
         scene.clear_scene()
         if args.normalize != 'none':
-            V, _ = norm_mod.normalize_verts(V, mode=args.normalize)
-        center = norm_mod.scene_center(V)
-        diag = norm_mod.scene_diag(V)
-        keep = False
-    else:
-        # Preserve file-embedded materials. Import once outside the view loop.
-        scene.clear_scene()
-        keep = True
-        center = None
-        diag = None  # computed inside the loop after first import
+            V, _ = normalize.normalize_verts(V, mode=args.normalize)
+        center = normalize.scene_center(V)
+        diag = normalize.scene_diag(V)
 
-    hdri = args.hdri
-    if not os.path.isabs(hdri):
-        hdri = os.path.join(world.ENVMAP_DIR, hdri)
+    hdri = args.hdri if os.path.isabs(args.hdri) \
+        else os.path.join(world.ENVMAP_DIR, args.hdri)
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    ext = 'png' if args.output_format == 'png' else 'exr'
-    for vi in range(args.views):
-        scene.clear_scene()
+    nonlocal_state = {'center': center, 'diag': diag}
+
+    def build_scene(fi):
         world.set_world_hdri(hdri, strength=args.hdri_strength)
         render_setup.setup_cycles(samples=args.samples, resolution=args.res)
         render_setup.enable_aux_passes(z=False, normal=False)
-
-        if keep:
+        bpy.context.scene.use_nodes = False
+        if args.keep_materials:
             objs = scene.import_with_materials(mesh_path)
-            center, diag = scene.world_aabb(objs)
+            nonlocal_state['center'], nonlocal_state['diag'] = scene.world_aabb(objs)
         else:
             if args.two_sided:
                 mat = materials.two_sided_diffuse('mat', (*args.color, 1.0))
             else:
-                mat = materials.diffuse_realistic('mat', (*args.color, 1.0),
-                                                    roughness=args.roughness,
-                                                    metallic=args.metallic)
+                mat = materials.diffuse_realistic(
+                    'mat', (*args.color, 1.0),
+                    roughness=args.roughness, metallic=args.metallic)
             scene.add_mesh_from_arrays('obj', V, F, mat=mat, smooth=True)
 
-        camera.add_orbit_camera(vi, args.views, center, diag,
-                                 distance_factor=args.distance,
-                                 elevation_deg=args.elevation)
+    def configure_output(frame_path):
+        cli.configure_output_format(bpy.context.scene, args.output_format)
 
-        out_path = os.path.join(args.out_dir, f'v{vi:02d}.{ext}')
-        bpy.context.scene.use_nodes = False
-        configure_output_format(bpy.context.scene, args.output_format)
-        bpy.context.scene.render.filepath = out_path
-        bpy.ops.render.render(write_still=True)
-        print(f'[diffuse] wrote {out_path}')
+    trajectory = cli.build_trajectory(args)
+
+    if args.keep_materials:
+        # Need scene center/diag from a probe import before driving the loop.
+        scene.clear_scene()
+        objs = scene.import_with_materials(mesh_path)
+        nonlocal_state['center'], nonlocal_state['diag'] = scene.world_aabb(objs)
+
+    ext = 'png' if args.output_format == 'png' else 'exr'
+    mp4_out = os.path.join(args.out_dir, 'video.mp4') if args.mp4 else None
+    render_frames(trajectory,
+                   nonlocal_state['center'], nonlocal_state['diag'],
+                   out_dir=args.out_dir,
+                   build_scene=build_scene,
+                   configure_output=configure_output,
+                   extension=ext,
+                   mp4_out=mp4_out, fps=args.fps)
 
 
 if __name__ == '__main__':

@@ -109,10 +109,10 @@ def main():
 
     if args.mask_dir:
         view_dirs = sorted(d for d in os.listdir(args.mask_dir)
-                            if d.startswith('v') and
+                            if (d.startswith('v') or d.startswith('f')) and
                             os.path.isfile(os.path.join(args.mask_dir, d, '0001.exr')))
         if not view_dirs:
-            sys.exit(f'no v*/0001.exr in {args.mask_dir}')
+            sys.exit(f'no f*/0001.exr (or v*/0001.exr) in {args.mask_dir}')
         for v in view_dirs:
             vdir = os.path.join(args.mask_dir, v)
             written = process_mask_view(os.path.join(vdir, '0001.exr'), vdir)
@@ -121,10 +121,10 @@ def main():
 
     import matplotlib.pyplot as plt
     view_dirs = sorted(d for d in os.listdir(args.exr_dir)
-                       if d.startswith('v') and
+                       if (d.startswith('v') or d.startswith('f')) and
                        os.path.isfile(os.path.join(args.exr_dir, d, '0001.exr')))
     if not view_dirs:
-        sys.exit(f'no v*/0001.exr in {args.exr_dir}')
+        sys.exit(f'no f*/0001.exr (or v*/0001.exr) in {args.exr_dir}')
 
     rows = []
     for v in view_dirs:

@@ -6,7 +6,17 @@ entry points. Stop writing one-off render scripts — invoke this kit instead.
 ```bash
 bash install.sh                            # one-shot: downloads Blender 4.2 LTS
 export BLENDER="$PWD/blender/blender"
+
+# 4-view static (legacy default)
 $BLENDER -b --python scripts/render_diffuse.py -- --obj input.glb --out_dir out/
+
+# 60-frame turntable video
+$BLENDER -b --python scripts/render_diffuse.py -- --obj input.glb --out_dir out/ \
+        --trajectory circle --frames 60 --mp4 --fps 30
+
+# URDF robot at rest, half-orbit
+$BLENDER -b --python scripts/render_urdf.py -- --urdf robot.urdf --out_dir out/ \
+        --trajectory half_circle --frames 30 --sweep 180
 ```
 
 Three render entry points, one EXR decoder, one mesh-format converter. Each
@@ -15,8 +25,13 @@ runs in Blender's bundled Python; the EXR decoder runs in your system Python
 
 ## Capabilities
 
+Every render script takes the same camera + video flags (`--trajectory
+{static,circle,half_circle,hemisphere_jitter}`, `--frames N`, `--mp4`, etc.)
+so the same loop drives PNG sequences and mp4 turntables.
+
 | Script | What it produces |
 |---|---|
+| `scripts/render_urdf.py` | Render a URDF robot at rest pose. Walks the kinematic tree, places each link's visual mesh, honors `<material><color>`. |
 | `scripts/render_diffuse.py` | Realistic Cycles render under HDRI lighting. Principled BSDF, two-sided diffuse, or file-embedded materials (`--keep_materials` honors OBJ+MTL / GLB textures / FBX). |
 | `scripts/render_parts.py` | Per-part `tab20` color render. Reads `face_ids.npy` aligned to the mesh's face order. |
 | `scripts/render_pbr.py` | Render with a Poly Haven / ambientCG style PBR texture folder. Auto-detects base color / roughness / normal / metallic / AO / displacement maps. |
@@ -26,6 +41,23 @@ runs in Blender's bundled Python; the EXR decoder runs in your system Python
 | `scripts/convert_mesh.py` | Convert between `.obj` / `.ply` / `.glb` / `.gltf` / `.stl` / `.fbx` with correct per-format axis handling. |
 | `scripts/exr_to_png.py` | EXR → PNG via `linear_to_srgb`. Single-file or multilayer mode. |
 | `scripts/fetch_polyhaven_pbr.sh` | One-shot CC0 PBR pack fetcher (slug + resolution → folder ready for `render_pbr.py`). |
+| `scripts/frames_to_mp4.py` | Standalone PNG-sequence → mp4 helper (uses ffmpeg). |
+
+## Camera trajectories
+
+All render scripts share `--trajectory` with four presets:
+
+| name | shape | key args |
+|---|---|---|
+| `static` (default) | N views evenly around a circle (legacy 4-view default) | `--frames`, `--elevation`, `--start_az`, `--distance` |
+| `circle` | full 360° orbit at constant elevation | `--frames`, `--elevation`, `--start_az`, `--distance` |
+| `half_circle` | partial sweep | `--frames`, `--start_az`, `--sweep`, `--elevation`, `--distance` |
+| `hemisphere_jitter` | random points on a patch of the hemisphere | `--frames`, `--center_az`, `--center_el`, `--az_range`, `--el_range`, `--distance`, `--distance_jitter`, `--seed` |
+
+Add `--mp4` (+ `--fps`) to any PNG-output script to stitch frames into
+`out_dir/video.mp4` via ffmpeg. For per-frame EXR scripts (depth+normal,
+mask), decode first with `exr_to_png.py`, then stitch with
+`scripts/frames_to_mp4.py`.
 
 ## Hard policies
 
