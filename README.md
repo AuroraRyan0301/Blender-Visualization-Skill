@@ -58,9 +58,13 @@ Three sources of geometry; all return a `Scene` with `objects`, `center`,
 `diag`, optional `part_id` and `world_matrix` per object.
 
 ```
---scene mesh   --mesh PATH                        single mesh, no parts
---scene parts  --mesh PATH --face_ids PATH        mesh + per-face part IDs
---scene urdf   --urdf PATH [--mesh_root PATH]     URDF tree at rest pose
+--scene mesh        --mesh PATH                        single mesh, no parts
+--scene parts       --mesh PATH --face_ids PATH        mesh + per-face part IDs
+--scene urdf        --urdf PATH [--mesh_root PATH]     URDF tree at rest pose
+--scene voxels      --npz PATH                         voxel cubes per part
+--scene arrows      --npz PATH                         arrow primitives
+--scene attraction  --npz PATH                         KaiNinja attraction field
+--scene bboxes      --npz PATH                         per-part bounding boxes
 ```
 
 Selection + normalization:

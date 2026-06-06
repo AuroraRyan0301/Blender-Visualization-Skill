@@ -116,6 +116,204 @@ class Scene:
         return cls._finalize(objs, normalize, has_parts=True, source='urdf')
 
     @classmethod
+    def from_voxels(cls, npz_path: str, *,
+                    coords_key: str = 'coords',
+                    part_id_key: Optional[str] = 'part_id',
+                    dv_key: Optional[str] = 'dual_vertices',
+                    grid_resolution: int = 512,
+                    voxel_size: float = 0.003,
+                    max_voxels: Optional[int] = None,
+                    normalize: str = 'whole',
+                    select_parts: Optional[Iterable[int]] = None) -> 'Scene':
+        """Voxel point cloud rendered as N small cubes.
+
+        Each voxel = one unit cube of `voxel_size` edge length. Positions are
+        (coords + optional dual_vertices) / grid_resolution - 0.5, mapping a
+        grid_resolution³ voxel grid to [-0.5, 0.5]³.
+
+        One SceneObject per part_id so tab20 colors apply per part.
+        """
+        from . import primitives
+        d = np.load(npz_path)
+        coords = d[coords_key].astype(np.float32)
+        if dv_key and dv_key in d.files:
+            coords = coords + d[dv_key].astype(np.float32)
+        pos = coords / float(grid_resolution) - 0.5
+        if part_id_key and part_id_key in d.files:
+            pids = d[part_id_key].astype(np.int32)
+        else:
+            pids = np.zeros(len(pos), dtype=np.int32)
+        if max_voxels is not None and len(pos) > max_voxels:
+            idx = np.random.default_rng(0).choice(len(pos), max_voxels,
+                                                    replace=False)
+            pos, pids = pos[idx], pids[idx]
+        all_pids = sorted(int(p) for p in np.unique(pids) if int(p) >= 0)
+        if select_parts is not None and select_parts != 'all':
+            sel = set(int(x) for x in select_parts)
+            keep = [p for p in all_pids if p in sel]
+        else:
+            keep = all_pids
+        objs = []
+        for pid in keep:
+            mask = pids == pid
+            V, F = primitives.cubes_at(pos[mask], voxel_size)
+            if V.shape[0] == 0:
+                continue
+            objs.append(SceneObject(name=f'vox_p{pid}', V=V, F=F, part_id=pid))
+        return cls._finalize(objs, normalize, has_parts=len(keep) > 1,
+                              source='voxels')
+
+    @classmethod
+    def from_arrows(cls, npz_path: str, *,
+                    positions_key: str = 'positions',
+                    directions_key: str = 'directions',
+                    part_id_key: Optional[str] = 'part_id',
+                    lengths_key: Optional[str] = None,
+                    max_arrows: int = 300,
+                    shaft_radius: float = 0.005,
+                    head_radius: float = 0.012,
+                    head_fraction: float = 0.3,
+                    arrow_sides: int = 6,
+                    normalize: str = 'none',
+                    select_parts: Optional[Iterable[int]] = None) -> 'Scene':
+        """Arrows = cylinder shaft + cone head, one per (position, direction).
+
+        normalize='none' is the sensible default because arrows are usually
+        overlaid on something else and you want their world coords to match.
+        """
+        from . import primitives
+        d = np.load(npz_path)
+        pos = d[positions_key].astype(np.float32)
+        dirs = d[directions_key].astype(np.float32)
+        norms = np.linalg.norm(dirs, axis=1)
+        if lengths_key and lengths_key in d.files:
+            L = d[lengths_key].astype(np.float32)
+        else:
+            L = norms
+        pids = d[part_id_key].astype(np.int32) if (part_id_key and part_id_key in d.files) \
+            else np.zeros(len(pos), dtype=np.int32)
+        if len(pos) > max_arrows:
+            idx = np.linspace(0, len(pos) - 1, max_arrows).astype(np.int64)
+            pos, dirs, L, pids = pos[idx], dirs[idx], L[idx], pids[idx]
+        all_pids = sorted(int(p) for p in np.unique(pids) if int(p) >= 0)
+        if select_parts is not None and select_parts != 'all':
+            sel = set(int(x) for x in select_parts)
+            keep = [p for p in all_pids if p in sel]
+        else:
+            keep = all_pids
+        objs = []
+        for pid in keep:
+            mask = pids == pid
+            V, F = primitives.arrows(
+                pos[mask], dirs[mask], L[mask],
+                shaft_radius=shaft_radius, head_radius=head_radius,
+                head_fraction=head_fraction, sides=arrow_sides)
+            if V.shape[0] == 0:
+                continue
+            objs.append(SceneObject(name=f'arr_p{pid}', V=V, F=F, part_id=pid))
+        return cls._finalize(objs, normalize, has_parts=len(keep) > 1,
+                              source='arrows')
+
+    @classmethod
+    def from_attraction(cls, npz_path: str, *,
+                         coords_key: str = 'coords',
+                         dv_key: Optional[str] = 'dual_vertices',
+                         attraction_key: str = 'attraction',
+                         part_id_key: Optional[str] = 'part_id',
+                         grid_resolution: int = 512,
+                         attr_slot: int = 0,
+                         max_arrows: int = 300,
+                         arrow_scale: float = 0.05,
+                         normalize: str = 'whole',
+                         select_parts: Optional[Iterable[int]] = None) -> 'Scene':
+        """KaiNinja attraction field as arrows.
+
+        The attraction array is (N, 9): 3 attraction targets per voxel × 3
+        coords each. attr_slot picks which of the 3 to draw (0, 1, or 2).
+        attr_slot=-1 means draw all 3 (3× more arrows).
+
+        Positions: (coords + dv) / grid_resolution - 0.5.
+        Direction: attraction[:, 3*slot : 3*slot+3] interpreted as a TARGET
+                   relative to the voxel position; the arrow points from the
+                   voxel toward the target. Length = arrow_scale * ||target||.
+        """
+        from . import primitives
+        d = np.load(npz_path)
+        coords = d[coords_key].astype(np.float32)
+        if dv_key and dv_key in d.files:
+            coords = coords + d[dv_key].astype(np.float32)
+        pos = coords / float(grid_resolution) - 0.5
+        attr = d[attraction_key].astype(np.float32)
+        if attr.shape[1] != 9:
+            raise ValueError(f'expected attraction (N,9), got {attr.shape}')
+        pids = d[part_id_key].astype(np.int32) if (part_id_key and part_id_key in d.files) \
+            else np.zeros(len(pos), dtype=np.int32)
+
+        if attr_slot == -1:
+            slots = (0, 1, 2)
+        else:
+            slots = (attr_slot,)
+        positions_all, dirs_all, pids_all = [], [], []
+        for s in slots:
+            v = attr[:, 3 * s:3 * s + 3]
+            positions_all.append(pos)
+            dirs_all.append(v)
+            pids_all.append(pids)
+        pos_cat = np.concatenate(positions_all, axis=0)
+        dir_cat = np.concatenate(dirs_all, axis=0)
+        pid_cat = np.concatenate(pids_all, axis=0)
+        L = np.linalg.norm(dir_cat, axis=1) * arrow_scale
+
+        if len(pos_cat) > max_arrows:
+            idx = np.linspace(0, len(pos_cat) - 1, max_arrows).astype(np.int64)
+            pos_cat, dir_cat, L, pid_cat = pos_cat[idx], dir_cat[idx], L[idx], pid_cat[idx]
+        all_pids = sorted(int(p) for p in np.unique(pid_cat) if int(p) >= 0)
+        if select_parts is not None and select_parts != 'all':
+            sel = set(int(x) for x in select_parts)
+            keep = [p for p in all_pids if p in sel]
+        else:
+            keep = all_pids
+        objs = []
+        for pid in keep:
+            mask = pid_cat == pid
+            V, F = primitives.arrows(pos_cat[mask], dir_cat[mask], L[mask])
+            if V.shape[0] == 0:
+                continue
+            objs.append(SceneObject(name=f'attr_p{pid}', V=V, F=F, part_id=pid))
+        return cls._finalize(objs, normalize, has_parts=len(keep) > 1,
+                              source='attraction')
+
+    @classmethod
+    def from_bboxes(cls, npz_path: str, *,
+                     mins_key: str = 'mins',
+                     maxs_key: str = 'maxs',
+                     part_ids_key: Optional[str] = 'part_ids_unique',
+                     normalize: str = 'whole') -> 'Scene':
+        """Per-part axis-aligned bounding boxes as solid cuboids."""
+        from . import primitives
+        d = np.load(npz_path)
+        if 'part_bboxes' in d.files:
+            # KaiNinja convention: part_bboxes (P, 6) = [xmin,ymin,zmin,xmax,ymax,zmax]
+            bb = d['part_bboxes'].astype(np.float32)
+            mins, maxs = bb[:, :3], bb[:, 3:]
+        else:
+            mins = d[mins_key].astype(np.float32)
+            maxs = d[maxs_key].astype(np.float32)
+        if part_ids_key and part_ids_key in d.files:
+            pids = d[part_ids_key].astype(np.int32)
+        else:
+            pids = np.arange(len(mins), dtype=np.int32)
+        objs = []
+        for i, pid in enumerate(pids):
+            V, F = primitives.bboxes(mins[i:i + 1], maxs[i:i + 1])
+            if V.shape[0] == 0:
+                continue
+            objs.append(SceneObject(name=f'bbox_p{pid}', V=V, F=F,
+                                      part_id=int(pid)))
+        return cls._finalize(objs, normalize, has_parts=len(objs) > 1,
+                              source='bboxes')
+
+    @classmethod
     def _finalize(cls, objs, normalize, *, has_parts, source, all_V=None):
         if not objs:
             raise ValueError('scene contains no geometry')

@@ -51,14 +51,32 @@ from lib.render_pipeline import render_frames
 
 def add_args(ap):
     s = ap.add_argument_group('scene')
-    s.add_argument('--scene', choices=['mesh', 'parts', 'urdf'],
+    s.add_argument('--scene', choices=['mesh', 'parts', 'urdf',
+                                          'voxels', 'arrows', 'attraction',
+                                          'bboxes'],
                     help='required unless using --manifest')
     s.add_argument('--mesh', help='mesh path or KaiNinja obj-id (mesh/parts)')
     s.add_argument('--face_ids', help='[parts] face_ids.npy')
     s.add_argument('--urdf', help='[urdf] URDF file')
     s.add_argument('--mesh_root', help='[urdf] base for package:// resolution')
+    s.add_argument('--npz', help='[voxels/arrows/attraction/bboxes] npz file')
+    s.add_argument('--voxel_size', type=float, default=0.003,
+                    help='[voxels] cube edge length in normalized units')
+    s.add_argument('--grid_resolution', type=int, default=512,
+                    help='[voxels/attraction] coord grid resolution')
+    s.add_argument('--max_voxels', type=int, default=None,
+                    help='[voxels] random subsample cap')
+    s.add_argument('--max_arrows', type=int, default=300,
+                    help='[arrows/attraction] arrow count cap')
+    s.add_argument('--shaft_radius', type=float, default=0.005)
+    s.add_argument('--head_radius', type=float, default=0.012)
+    s.add_argument('--head_fraction', type=float, default=0.3)
+    s.add_argument('--attr_slot', type=int, default=0,
+                    help='[attraction] which of 3 slots (0/1/2), -1 = all 3')
+    s.add_argument('--arrow_scale', type=float, default=0.05,
+                    help='[attraction] multiplies |attr| -> arrow length')
     s.add_argument('--select_parts', default='all',
-                    help='[parts/urdf] "all" or comma-separated ids')
+                    help='"all" or comma-separated part ids')
     s.add_argument('--normalize', choices=['whole', 'selected', 'none'],
                     default='whole')
     s.add_argument('--source_frame', choices=['auto', 'y_up', 'z_up'],
@@ -136,11 +154,44 @@ def resolve_scene(args):
             raise SystemExit('--scene urdf requires --urdf')
         return scene_assembly.Scene.from_urdf(
             args.urdf, mesh_root=args.mesh_root, normalize=args.normalize)
+    sel = None
+    if args.select_parts and args.select_parts != 'all':
+        sel = [int(x) for x in args.select_parts.split(',') if x.strip()]
+    if args.scene == 'voxels':
+        if not args.npz:
+            raise SystemExit('--scene voxels requires --npz')
+        return scene_assembly.Scene.from_voxels(
+            args.npz, voxel_size=args.voxel_size,
+            grid_resolution=args.grid_resolution, max_voxels=args.max_voxels,
+            normalize=args.normalize, select_parts=sel)
+    if args.scene == 'arrows':
+        if not args.npz:
+            raise SystemExit('--scene arrows requires --npz')
+        return scene_assembly.Scene.from_arrows(
+            args.npz, max_arrows=args.max_arrows,
+            shaft_radius=args.shaft_radius, head_radius=args.head_radius,
+            head_fraction=args.head_fraction,
+            normalize=args.normalize, select_parts=sel)
+    if args.scene == 'attraction':
+        if not args.npz:
+            raise SystemExit('--scene attraction requires --npz')
+        return scene_assembly.Scene.from_attraction(
+            args.npz, grid_resolution=args.grid_resolution,
+            attr_slot=args.attr_slot, arrow_scale=args.arrow_scale,
+            max_arrows=args.max_arrows,
+            normalize=args.normalize, select_parts=sel)
+    if args.scene == 'bboxes':
+        if not args.npz:
+            raise SystemExit('--scene bboxes requires --npz')
+        return scene_assembly.Scene.from_bboxes(
+            args.npz, normalize=args.normalize)
     raise SystemExit(f'unknown scene: {args.scene}')
 
 
 def default_material(scene_kind):
-    return {'mesh': 'diffuse', 'parts': 'tab20', 'urdf': 'embedded'}[scene_kind]
+    return {'mesh': 'diffuse', 'parts': 'tab20', 'urdf': 'embedded',
+            'voxels': 'tab20', 'arrows': 'tab20',
+            'attraction': 'tab20', 'bboxes': 'tab20'}[scene_kind]
 
 
 # ---------------------------------------------------------------------------

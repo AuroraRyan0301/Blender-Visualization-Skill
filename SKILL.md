@@ -33,10 +33,30 @@ $BLENDER -b --python scripts/render.py -- \
 ## Stage 1 — Scene
 
 ```
---scene mesh   --mesh PATH                       single mesh, no parts
---scene parts  --mesh PATH --face_ids PATH       per-face part IDs
---scene urdf   --urdf PATH [--mesh_root PATH]    URDF tree at rest pose
+--scene mesh        --mesh PATH                       single mesh, no parts
+--scene parts       --mesh PATH --face_ids PATH       per-face part IDs
+--scene urdf        --urdf PATH [--mesh_root PATH]    URDF tree at rest pose
+--scene voxels      --npz PATH                        voxel cubes from npz
+--scene arrows      --npz PATH                        arrow primitives from npz
+--scene attraction  --npz PATH                        KaiNinja attraction field
+--scene bboxes      --npz PATH                        per-part AABB cuboids
 ```
+
+`voxels` reads keys `coords (N,3)` + optional `dual_vertices (N,3)` +
+optional `part_id (N,)`. Each voxel becomes one cube of edge `--voxel_size`.
+Positions = `(coords + dv) / --grid_resolution - 0.5` (default grid_res=512).
+`--max_voxels` subsamples.
+
+`arrows` reads `positions (N,3)` + `directions (N,3)` + optional `part_id`.
+Each arrow = cylinder shaft + cone head (`--shaft_radius`, `--head_radius`,
+`--head_fraction`). `--max_arrows` caps count.
+
+`attraction` reads KaiNinja ovoxel npz (`coords`, `dual_vertices`, `part_id`,
+`attraction (N,9)`). `--attr_slot` picks 0/1/2 of the 3 attraction targets
+(or -1 for all 3). Arrow length = `--arrow_scale × ||target||`.
+
+`bboxes` reads `part_bboxes (P,6)` or `mins (P,3) + maxs (P,3)`. Each box is
+one solid cuboid colored by part_id.
 
 `--mesh` accepts a path to obj/ply/glb/gltf/stl/fbx or a KaiNinja obj-id
 (resolves to `/gs/bs/tga-koike-shanda/yurh/KaiNinja_v2/preprocess/<id>/`).
