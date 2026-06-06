@@ -45,7 +45,8 @@ $BLENDER -b --python scripts/render.py -- \
 `voxels` reads keys `coords (N,3)` + optional `dual_vertices (N,3)` +
 optional `part_id (N,)`. Each voxel becomes one cube of edge `--voxel_size`.
 Positions = `(coords + dv) / --grid_resolution - 0.5` (default grid_res=512).
-`--max_voxels` subsamples.
+`--max_voxels` subsamples. **This is the raw voxel-cloud view**; for the
+proper decoded mesh, run `ovoxel_to_mesh.py` first (see below).
 
 `arrows` reads `positions (N,3)` + `directions (N,3)` + optional `part_id`.
 Each arrow = cylinder shaft + cone head (`--shaft_radius`, `--head_radius`,
@@ -72,6 +73,24 @@ one solid cuboid colored by part_id.
 Per-format axis defaults: OBJ / GLB / GLTF / FBX = Y-up, PLY / STL / OFF =
 Z-up. URDF-referenced meshes are treated as already in link frame
 (no swap), per REP-103.
+
+### Decoding ovoxel npz to a real mesh
+
+`scripts/ovoxel_to_mesh.py` runs **outside Blender** (needs torch + CUDA +
+KaiNinja's `o_voxel` package). It calls `flexible_dual_grid_to_mesh` on
+the npz's (coords, dual_vertices, intersected) to get the true continuous
+mesh, plus propagates per-voxel `part_id` to per-face `face_ids` via
+majority vote.
+
+```bash
+conda activate trellis2     # or any env with o_voxel built
+python scripts/ovoxel_to_mesh.py --in ov.npz --out_obj mesh.obj
+# wrote mesh.obj + mesh.fids.npy
+
+# Then render the proper mesh with the skill:
+$BLENDER -b --python scripts/render.py -- \\
+    --scene parts --mesh mesh.obj --face_ids mesh.fids.npy --out_dir out
+```
 
 ## Stage 2 — Material
 
